@@ -1,0 +1,20 @@
+# Ambienti virtuali
+venv/
+env/
+.env
+
+# Cache di Python
+__pycache__/
+*.pyc
+*.pyo
+
+# File di Database
+*.db
+*.sqlite
+*.sqlite3
+dental_app.db
+
+# File di sistema e IDE
+.vscode/
+.idea/
+.DS_Store
