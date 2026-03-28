@@ -15,6 +15,7 @@ Dipendenze: solo libreria standard (sqlite3, pathlib, datetime)
 import sqlite3
 import shutil
 import os
+import uuid
 from pathlib import Path
 from datetime import date
 from typing import Optional
@@ -350,27 +351,9 @@ def upload_foto(
     Copia fisicamente l'immagine nella cartella di storage dell'app e
     inserisce i metadati nel database.
 
-    Logica di copia:
-      - Rinomina il file con il prefisso "p{paziente_id}_" per evitare collisioni
-        tra pazienti diversi che abbiano foto con lo stesso nome originale.
-      - Se un file con quel nome esiste già (upload duplicato), aggiunge
-        un suffisso numerico progressivo (_1, _2, …).
-
-    Args:
-        paziente_id:   ID del paziente proprietario della foto.
-        sorgente_path: Percorso assoluto del file originale sul PC dell'utente.
-        data_scatto:   Data della fotografia (oggetto date). Default: oggi.
-        dente:         Codice FDI o descrizione arcata (es. "21", "Arcata Superiore").
-        branca:        Specialità clinica (es. "Conservativa").
-        fase:          Fase clinica (es. "Post-op").
-        note:          Annotazioni libere.
-
-    Returns:
-        ID intero del record foto appena creato.
-
-    Raises:
-        FileNotFoundError: se il file sorgente non esiste.
-        ValueError:        se paziente_id non corrisponde a nessun paziente.
+    Logica di copia (AGGIORNATA PER PRIVACY):
+      - Genera un UUID univoco per il nome del file, separando l'identità
+        del paziente dal file system per conformità GDPR.
     """
     sorgente_path = Path(sorgente_path)
     if not sorgente_path.is_file():
@@ -379,19 +362,18 @@ def upload_foto(
     if get_paziente_by_id(paziente_id) is None:
         raise ValueError(f"Nessun paziente con ID {paziente_id}")
 
-    # --- Costruisce il nome destinazione evitando collisioni ---
-    nome_base = f"p{paziente_id}_{sorgente_path.name}"
-    dest_path = IMAGES_DIR / nome_base
+    # --- NUOVA LOGICA DI ANONIMIZZAZIONE (UUID) ---
+    # Estraiamo solo l'estensione originale (es. '.jpg', '.png')
+    estensione = sorgente_path.suffix.lower()
 
-    if dest_path.exists():
-        stem = sorgente_path.stem
-        suffix = sorgente_path.suffix
-        counter = 1
-        while dest_path.exists():
-            dest_path = IMAGES_DIR / f"p{paziente_id}_{stem}_{counter}{suffix}"
-            counter += 1
+    # Generiamo un nome file sicuro, univoco e anonimo
+    nome_sicuro = f"{uuid.uuid4().hex}{estensione}"
+    dest_path = IMAGES_DIR / nome_sicuro
 
-    shutil.copy2(sorgente_path, dest_path)   # copy2 preserva i metadati EXIF
+    # Copiamo il file. Essendo un UUID a 32 caratteri generato casualmente,
+    # la probabilità di collisione è nulla, quindi non serve più
+    # il ciclo 'while' di controllo duplicati.
+    shutil.copy2(sorgente_path, dest_path)
 
     # Percorso relativo salvato nel DB (portabile su qualunque OS)
     percorso_relativo = dest_path.relative_to(APP_DIR).as_posix()
@@ -416,7 +398,6 @@ def upload_foto(
             ),
         )
         return cur.lastrowid
-
 
 def elimina_foto(foto_id: int, elimina_file: bool = False) -> None:
     """
