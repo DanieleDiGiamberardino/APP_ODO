@@ -641,6 +641,61 @@ def aggiorna_tag_foto(
 
 
 # ---------------------------------------------------------------------------
+# KPI — statistiche per dashboard e status bar
+# ---------------------------------------------------------------------------
+
+def kpi_stats() -> dict:
+    """
+    Restituisce le statistiche chiave dell'applicazione in un unico dict.
+    Usato da KPI cards (dashboard) e status bar.
+
+    Campi restituiti:
+      pazienti      → numero totale di pazienti
+      foto_totali   → numero totale di foto archiviate
+      foto_oggi     → foto scattate/caricate oggi
+      foto_settimana→ foto degli ultimi 7 giorni
+      db_size_mb    → dimensione del file DB in MB
+      ultimo_backup → Path dell'ultimo file .zip in backups/, o None
+    """
+    from datetime import date, timedelta
+    oggi  = date.today().isoformat()
+    sette = (date.today() - timedelta(days=7)).isoformat()
+
+    with get_connection() as conn:
+        n_paz   = conn.execute("SELECT COUNT(*) FROM pazienti").fetchone()[0]
+        n_foto  = conn.execute("SELECT COUNT(*) FROM foto").fetchone()[0]
+        n_oggi  = conn.execute(
+            "SELECT COUNT(*) FROM foto WHERE date(aggiunta_il) = ?", (oggi,)
+        ).fetchone()[0]
+        n_sett  = conn.execute(
+            "SELECT COUNT(*) FROM foto WHERE date(aggiunta_il) >= ?", (sette,)
+        ).fetchone()[0]
+
+    # Dimensione DB
+    try:
+        db_size_mb = round(DB_PATH.stat().st_size / 1_048_576, 2)
+    except Exception:
+        db_size_mb = 0.0
+
+    # Ultimo backup
+    backup_dir = APP_DIR / "backups"
+    ultimo_backup = None
+    if backup_dir.exists():
+        zips = sorted(backup_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime)
+        if zips:
+            ultimo_backup = zips[-1]
+
+    return {
+        "pazienti":       n_paz,
+        "foto_totali":    n_foto,
+        "foto_oggi":      n_oggi,
+        "foto_settimana": n_sett,
+        "db_size_mb":     db_size_mb,
+        "ultimo_backup":  ultimo_backup,
+    }
+
+
+# ---------------------------------------------------------------------------
 # ENTRY POINT — test rapido dello schema
 # ---------------------------------------------------------------------------
 

@@ -337,8 +337,8 @@ class BeforeAfterFrame(ctk.CTkFrame):
         self._ba.grid(row=1, column=0, sticky="nsew")
 
         # Bind tastiera
-        self.bind_all("<Left>",  lambda e: self._ba.slider_step(-0.05))
-        self.bind_all("<Right>", lambda e: self._ba.slider_step(+0.05))
+        self.winfo_toplevel().bind("<Left>", lambda e: self._ba.slider_step(-0.05))
+        self.winfo_toplevel().bind("<Right>", lambda e: self._ba.slider_step(0.05))
 
     # ------------------------------------------------------------------
 

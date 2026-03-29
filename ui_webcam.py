@@ -81,11 +81,15 @@ def _scan_dispositivi() -> list[tuple[int, str]]:
     if not CV2_OK:
         return []
     trovati = []
+    # Silenzia i warning DSHOW di OpenCV durante la scansione
+    old_level = cv2.setLogLevel(0) if hasattr(cv2, "setLogLevel") else None
     for i in range(MAX_DEVICES):
         cap = cv2.VideoCapture(i, cv2.CAP_DSHOW if hasattr(cv2, 'CAP_DSHOW') else 0)
         if cap.isOpened():
             trovati.append((i, f"Camera {i}"))
             cap.release()
+    if old_level is not None:
+        cv2.setLogLevel(old_level)
     return trovati
 
 
@@ -113,6 +117,7 @@ class WebcamFrame(ctk.CTkFrame):
         self._tk_img: Optional[ImageTk.PhotoImage] = None
         self._stream_thread: Optional[threading.Thread] = None
         self._paz_id: Optional[int] = None
+        self._after_ids: list = []        # tiene traccia dei callback after() pendenti
 
         self._build_ui()
         self._ricarica_dispositivi()
@@ -344,7 +349,7 @@ class WebcamFrame(ctk.CTkFrame):
 
     def _avvia_camera(self):
         if not CV2_OK:
-            self.lblstatocam.configure(
+            self._lbl_stato_cam.configure(
                 text="⚠ opencv non installato (pip install opencv-python-headless)",
                 text_color=COLORI["rosso"]
             )
@@ -400,7 +405,12 @@ class WebcamFrame(ctk.CTkFrame):
             if not ret:
                 break
             self._frame_corrente = frame
-            self.after(0, self._mostra_frame, frame)
+            try:
+                if self.winfo_exists():
+                    aid = self.after(0, self._mostra_frame, frame)
+                    self._after_ids.append(aid)
+            except Exception:
+                break
             time.sleep(1 / 30)   # ~30 fps
 
     def _mostra_frame(self, frame_bgr):
@@ -408,6 +418,8 @@ class WebcamFrame(ctk.CTkFrame):
         if self._frozen:
             return
         try:
+            if not self.winfo_exists():
+                return
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             pil = Image.fromarray(rgb)
             cw = self._canvas.winfo_width()
@@ -456,8 +468,7 @@ class WebcamFrame(ctk.CTkFrame):
         self._btn_scatta.configure(state="disabled")
         self._btn_salva.configure(state="normal")
         self._btn_annulla.configure(state="normal")
-        self._lbl_stato_cam.configure(text="⏸  Foto congelata", text_color=COLORI["arancio","#ff9800"]
-                                       if hasattr(COLORI, "arancio") else "#ff9800")
+        self._lbl_stato_cam.configure(text="⏸  Foto congelata", text_color=COLORI["arancio"])
 
     def _riprendi_stream(self):
         """Riavvia il live stream dopo uno scatto non salvato."""
@@ -557,6 +568,12 @@ class WebcamFrame(ctk.CTkFrame):
 
     def destroy(self):
         self._live = False
+        for aid in self._after_ids:
+            try:
+                self.after_cancel(aid)
+            except Exception:
+                pass
+        self._after_ids.clear()
         if self._cap:
             self._cap.release()
             self._cap = None

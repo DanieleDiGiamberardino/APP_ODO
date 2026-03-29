@@ -25,8 +25,16 @@ import customtkinter as ctk
 from PIL import Image
 from datetime import date
 import threading
+import time
 from pathlib import Path
 from typing import Optional
+
+# Drag & Drop — opzionale (richiede: pip install tkinterdnd2)
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _DND_OK = True
+except ImportError:
+    _DND_OK = False
 
 import database as db
 from auth import SessioneUtente, init_auth_db, PERMESSI
@@ -100,6 +108,470 @@ def _badge(parent, testo: str, colore: str):
                  text_color="white", padx=6, pady=2).pack(side="left", padx=(0, 4))
 
 
+# ===========================================================================
+# TOAST NOTIFICATION SYSTEM
+# ===========================================================================
+
+class _ToastWidget(ctk.CTkFrame):
+    """Singola notifica toast — viene creata da ToastManager."""
+
+    COLORI_TIPO = {
+        "success": ("#1a4d2e", "#3ecf6e"),   # (sfondo, bordo/icona)
+        "error":   ("#4d1a1a", "#e94560"),
+        "info":    ("#0f2a4a", "#4a9eff"),
+        "warning": ("#4d3a0a", "#ffb347"),
+    }
+    ICONE = {"success": "✅", "error": "❌", "info": "ℹ️", "warning": "⚠️"}
+
+    def __init__(self, master, messaggio: str, tipo: str, durata_ms: int,
+                 on_chiudi):
+        bg, border = self.COLORI_TIPO.get(tipo, self.COLORI_TIPO["info"])
+        super().__init__(master, fg_color=bg, corner_radius=10,
+                         border_width=1, border_color=border)
+        self._on_chiudi = on_chiudi
+        self._dopo_id = None
+
+        inner = ctk.CTkFrame(self, fg_color="transparent")
+        inner.pack(padx=12, pady=9)
+
+        ctk.CTkLabel(inner, text=self.ICONE.get(tipo, "ℹ️"),
+                     font=("Segoe UI", 13), fg_color="transparent").pack(
+            side="left", padx=(0, 6))
+        ctk.CTkLabel(inner, text=messaggio,
+                     font=("Segoe UI", 11), wraplength=280,
+                     justify="left", fg_color="transparent").pack(side="left")
+
+        # Chiudi manuale
+        ctk.CTkButton(inner, text="×", width=18, height=18,
+                      font=("Segoe UI", 12), fg_color="transparent",
+                      hover_color=border,
+                      command=self._chiudi).pack(side="left", padx=(8, 0))
+
+        self._dopo_id = self.after(durata_ms, self._chiudi)
+
+    def _chiudi(self):
+        if self._dopo_id:
+            try:
+                self.after_cancel(self._dopo_id)
+            except Exception:
+                pass
+        self._on_chiudi(self)
+
+    def destroy(self):
+        if self._dopo_id:
+            try:
+                self.after_cancel(self._dopo_id)
+            except Exception:
+                pass
+        super().destroy()
+
+
+class ToastManager:
+    """
+    Gestore centralisato delle notifiche toast.
+    Uso: ToastManager.init(root)  →  poi ToastManager.mostra("testo", "success")
+    """
+    _root = None
+    _toasts: list = []
+
+    @classmethod
+    def init(cls, root):
+        cls._root = root
+        cls._toasts = []
+
+    @classmethod
+    def mostra(cls, messaggio: str, tipo: str = "info", durata_ms: int = 3500):
+        """
+        Mostra una notifica non bloccante.
+        tipo: "success" | "error" | "info" | "warning"
+        """
+        if cls._root is None:
+            return
+        toast = _ToastWidget(cls._root, messaggio, tipo, durata_ms,
+                             cls._rimuovi)
+        cls._toasts.append(toast)
+        cls._riposiziona()
+
+    @classmethod
+    def _rimuovi(cls, toast):
+        if toast in cls._toasts:
+            cls._toasts.remove(toast)
+        try:
+            toast.place_forget()
+            toast.destroy()
+        except Exception:
+            pass
+        cls._riposiziona()
+
+    @classmethod
+    def _riposiziona(cls):
+        """Ri-piazza i toast esistenti impilati in basso a destra."""
+        cls._toasts = [t for t in cls._toasts
+                       if t.winfo_exists() if not t._do_not_track
+                       ] if False else [
+            t for t in cls._toasts if t.winfo_exists()]
+        y_offset = 44   # sopra la status bar
+        for toast in reversed(cls._toasts):
+            toast.update_idletasks()
+            h = toast.winfo_reqheight() or 48
+            toast.place(relx=1.0, rely=1.0, x=-14, y=-(y_offset), anchor="se")
+            y_offset += h + 6
+
+
+# ===========================================================================
+# RICERCA GLOBALE  Ctrl+K
+# ===========================================================================
+
+class SpotlightSearch(ctk.CTkToplevel):
+    """
+    Popup di ricerca globale stile "command palette".
+
+    Aperto con Ctrl+K dall'App principale.
+    Cerca in tempo reale (debounce 200ms) su:
+      - pazienti  (cognome / nome)
+      - foto      (per paziente + dente + branca)
+
+    Tastiera:
+      ↑ / ↓    → naviga i risultati
+      Invio    → apre il risultato selezionato
+      Esc      → chiude
+
+    Ogni risultato ha un'azione primaria:
+      Paziente → naviga a Upload con quel paziente preselezionato
+      Foto     → apre DettaglioFoto
+    """
+
+    _MAX_RISULTATI = 12
+    _DEBOUNCE_MS   = 200
+
+    # Colori interni (coerenti con COLORI della app)
+    _C = {
+        "bg":      "#0c1424",
+        "input":   "#111827",
+        "row":     "#0f1a2e",
+        "row_sel": "#1a3050",
+        "border":  "#1e3a5f",
+        "accent":  "#2563eb",
+        "testo":   "#e2e8f0",
+        "sub":     "#64748b",
+        "badge_p": "#0f3460",
+        "badge_f": "#1a3a1a",
+    }
+
+    def __init__(self, master, on_apri_paziente=None, on_apri_foto=None):
+        super().__init__(master)
+        self._on_paz  = on_apri_paziente
+        self._on_foto = on_apri_foto
+        self._risultati: list = []   # lista di dict {tipo, label, sub, id, data}
+        self._sel_idx   = -1
+        self._db_id     = None       # debounce after-id
+        self._row_btns: list = []    # widget righe risultato
+
+        # Finestra
+        self.configure(fg_color=self._C["bg"])
+        self.overrideredirect(True)     # niente bordi OS
+        self.attributes("-topmost", True)
+        self.grab_set()
+
+        W, H = 640, 420
+        mx = master.winfo_x() + (master.winfo_width()  - W) // 2
+        my = master.winfo_y() + (master.winfo_height() - H) // 3
+        self.geometry(f"{W}x{H}+{mx}+{my}")
+
+        self._build_ui()
+
+        self.bind("<Escape>",  lambda e: self.destroy())
+        self.bind("<Up>",      lambda e: self._muovi(-1))
+        self.bind("<Down>",    lambda e: self._muovi(+1))
+        self.bind("<Return>",  lambda e: self._apri_sel())
+        # Click fuori → chiudi
+        self.bind("<FocusOut>", self._on_focus_out)
+
+        self._entry.focus_set()
+        self._ricerca()   # mostra subito i risultati vuoti / recenti
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Bordo esterno
+        outer = ctk.CTkFrame(self, fg_color=self._C["bg"],
+                              corner_radius=14,
+                              border_width=1,
+                              border_color=self._C["border"])
+        outer.grid(row=0, column=0, rowspan=2, sticky="nsew",
+                   padx=0, pady=0)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(1, weight=1)
+
+        # ── Barra di ricerca ─────────────────────────────────────────
+        top = ctk.CTkFrame(outer, fg_color="transparent")
+        top.grid(row=0, column=0, padx=0, pady=0, sticky="ew")
+        top.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(top, text="🔍", font=("Segoe UI", 16),
+                     fg_color="transparent",
+                     text_color=self._C["sub"]).grid(
+            row=0, column=0, padx=(18, 0), pady=16)
+
+        self._entry = ctk.CTkEntry(
+            top,
+            font=("Segoe UI", 15),
+            fg_color="transparent",
+            border_width=0,
+            corner_radius=0,
+            placeholder_text="Cerca pazienti, foto…",
+            placeholder_text_color=self._C["sub"],
+            text_color=self._C["testo"],
+            height=52,
+        )
+        self._entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self._entry.bind("<KeyRelease>", self._on_key)
+
+        # Badge hint
+        ctk.CTkLabel(top, text="ESC per chiudere",
+                     font=("Segoe UI", 9),
+                     fg_color="transparent",
+                     text_color=self._C["sub"]).grid(
+            row=0, column=2, padx=(0, 16))
+
+        # Separatore
+        ctk.CTkFrame(outer, height=1, fg_color=self._C["border"],
+                     corner_radius=0).grid(
+            row=1, column=0, sticky="ew", padx=0)
+
+        # ── Risultati ────────────────────────────────────────────────
+        self._scroll = ctk.CTkScrollableFrame(
+            outer,
+            fg_color="transparent",
+            scrollbar_button_color=self._C["border"],
+        )
+        self._scroll.grid(row=2, column=0, sticky="nsew",
+                          padx=6, pady=(6, 6))
+        self._scroll.grid_columnconfigure(0, weight=1)
+
+        # Footer
+        footer = ctk.CTkFrame(outer, fg_color="transparent", height=28)
+        footer.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+        ctk.CTkLabel(footer,
+                     text="↑↓ naviga   ↵ apri   Esc chiudi",
+                     font=("Segoe UI", 9),
+                     text_color=self._C["sub"],
+                     fg_color="transparent").pack(side="left")
+        self._lbl_count = ctk.CTkLabel(footer, text="",
+                                        font=("Segoe UI", 9),
+                                        text_color=self._C["sub"],
+                                        fg_color="transparent")
+        self._lbl_count.pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Ricerca
+    # ------------------------------------------------------------------
+
+    def _on_key(self, event):
+        # Frecce gestite dai bind globali
+        if event.keysym in ("Up", "Down", "Return", "Escape"):
+            return
+        if self._db_id:
+            try:
+                self.after_cancel(self._db_id)
+            except Exception:
+                pass
+        self._db_id = self.after(self._DEBOUNCE_MS, self._ricerca)
+
+    def _ricerca(self):
+        q = self._entry.get().strip()
+        risultati = []
+
+        def _fetch():
+            try:
+                # Pazienti
+                paz = db.cerca_pazienti(q)[:self._MAX_RISULTATI // 2]
+                for r in paz:
+                    n_foto = db.conta_foto_per_paziente(r["id"])
+                    risultati.append({
+                        "tipo":   "paziente",
+                        "label":  f"{r['cognome']} {r['nome']}",
+                        "sub":    f"📞 {r['telefono'] or '—'}  ·  📷 {n_foto} foto",
+                        "id":     r["id"],
+                        "data":   r,
+                    })
+                # Foto (cerca per nome paziente o testo libero)
+                foto = db.cerca_foto(
+                    paziente_id=None,
+                    dente=q or None,
+                    branca=None, fase=None
+                )[:self._MAX_RISULTATI // 2]
+                # Se c'è query, cerca anche per cognome paziente nelle foto
+                if q:
+                    paz_match = db.cerca_pazienti(q)
+                    for p in paz_match[:3]:
+                        extra = db.cerca_foto(paziente_id=p["id"])[:3]
+                        for f in extra:
+                            if not any(x["tipo"] == "foto" and x["id"] == f["id"]
+                                       for x in risultati):
+                                foto.append(f)
+
+                for f in foto[:self._MAX_RISULTATI // 2]:
+                    risultati.append({
+                        "tipo":  "foto",
+                        "label": f"{f['cognome']} {f['nome']}  —  {f['dente'] or '?'}",
+                        "sub":   f"📅 {f['data_scatto'] or '—'}  ·  {f['branca'] or ''}  ·  {f['fase'] or ''}",
+                        "id":    f["id"],
+                        "data":  f,
+                    })
+
+                self.after(0, lambda: self._mostra(risultati))
+            except Exception:
+                pass
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _mostra(self, risultati: list):
+        self._risultati = risultati
+        self._sel_idx   = -1
+        self._row_btns.clear()
+
+        for w in self._scroll.winfo_children():
+            w.destroy()
+
+        if not risultati:
+            ctk.CTkLabel(self._scroll,
+                         text="Nessun risultato" if self._entry.get().strip()
+                         else "Inizia a digitare…",
+                         font=("Segoe UI", 12),
+                         text_color=self._C["sub"],
+                         fg_color="transparent").grid(
+                row=0, column=0, pady=30)
+            self._lbl_count.configure(text="")
+            return
+
+        sezione_corrente = None
+        row_idx = 0
+        for i, r in enumerate(risultati):
+            # Intestazione sezione
+            sez = "👤  Pazienti" if r["tipo"] == "paziente" else "📷  Foto"
+            if sez != sezione_corrente:
+                sezione_corrente = sez
+                ctk.CTkLabel(self._scroll, text=sez,
+                             font=("Segoe UI", 9, "bold"),
+                             text_color=self._C["sub"],
+                             fg_color="transparent",
+                             anchor="w").grid(
+                    row=row_idx, column=0,
+                    padx=10, pady=(10 if row_idx > 0 else 4, 2),
+                    sticky="w")
+                row_idx += 1
+
+            # Riga risultato
+            riga = ctk.CTkFrame(self._scroll,
+                                fg_color=self._C["row"],
+                                corner_radius=8, cursor="hand2")
+            riga.grid(row=row_idx, column=0, padx=4, pady=2, sticky="ew")
+            riga.grid_columnconfigure(1, weight=1)
+
+            # Badge tipo
+            badge_col = self._C["badge_p"] if r["tipo"] == "paziente" else self._C["badge_f"]
+            badge_ico = "👤" if r["tipo"] == "paziente" else "📷"
+            ctk.CTkLabel(riga, text=badge_ico,
+                         font=("Segoe UI", 14),
+                         width=36, height=36,
+                         corner_radius=8,
+                         fg_color=badge_col).grid(
+                row=0, column=0, rowspan=2, padx=(8, 6), pady=8)
+
+            ctk.CTkLabel(riga, text=r["label"],
+                         font=("Segoe UI", 12),
+                         text_color=self._C["testo"],
+                         anchor="w",
+                         fg_color="transparent").grid(
+                row=0, column=1, sticky="ew", padx=(0, 8), pady=(8, 1))
+
+            ctk.CTkLabel(riga, text=r["sub"],
+                         font=("Segoe UI", 10),
+                         text_color=self._C["sub"],
+                         anchor="w",
+                         fg_color="transparent").grid(
+                row=1, column=1, sticky="ew", padx=(0, 8), pady=(0, 8))
+
+            # Freccia azione
+            ctk.CTkLabel(riga, text="→",
+                         font=("Segoe UI", 14),
+                         text_color=self._C["sub"],
+                         fg_color="transparent").grid(
+                row=0, column=2, rowspan=2, padx=(0, 12))
+
+            # Binding click e hover
+            idx_cap = i
+            for w in riga.winfo_children() + [riga]:
+                w.bind("<Button-1>",
+                       lambda e, ix=idx_cap: self._apri(ix))
+                w.bind("<Enter>",
+                       lambda e, f=riga, ix=idx_cap: self._hover(f, ix, True))
+                w.bind("<Leave>",
+                       lambda e, f=riga, ix=idx_cap: self._hover(f, ix, False))
+
+            self._row_btns.append(riga)
+            row_idx += 1
+
+        n = len(risultati)
+        self._lbl_count.configure(text=f"{n} risultat{'o' if n == 1 else 'i'}")
+
+    # ------------------------------------------------------------------
+    # Navigazione tastiera
+    # ------------------------------------------------------------------
+
+    def _muovi(self, delta: int):
+        if not self._row_btns:
+            return
+        # Deseleziona precedente
+        if 0 <= self._sel_idx < len(self._row_btns):
+            self._row_btns[self._sel_idx].configure(fg_color=self._C["row"])
+        self._sel_idx = max(0, min(self._sel_idx + delta,
+                                    len(self._row_btns) - 1))
+        self._row_btns[self._sel_idx].configure(fg_color=self._C["row_sel"])
+
+    def _hover(self, frame, idx: int, entrata: bool):
+        if idx != self._sel_idx:
+            frame.configure(
+                fg_color=self._C["row_sel"] if entrata else self._C["row"])
+
+    def _apri_sel(self):
+        if 0 <= self._sel_idx < len(self._risultati):
+            self._apri(self._sel_idx)
+
+    def _apri(self, idx: int):
+        if idx >= len(self._risultati):
+            return
+        r = self._risultati[idx]
+        self.destroy()
+        if r["tipo"] == "paziente" and self._on_paz:
+            self._on_paz(r["id"])
+        elif r["tipo"] == "foto" and self._on_foto:
+            self._on_foto(r["id"], r["data"])
+
+    def _on_focus_out(self, event):
+        # Chiudi solo se il focus va fuori dalla finestra spotlight
+        try:
+            fw = self.focus_get()
+            if fw and str(fw).startswith(str(self)):
+                return
+        except Exception:
+            pass
+        self.after(100, self._check_close)
+
+    def _check_close(self):
+        try:
+            if self.winfo_exists() and self.focus_get() is None:
+                self.destroy()
+        except Exception:
+            pass
+
+
 def _esporta_pdf_con_feedback(parent_widget, paziente_id: int,
                                filtri: Optional[dict] = None,
                                output_dir: Optional[Path] = None):
@@ -110,16 +582,7 @@ def _esporta_pdf_con_feedback(parent_widget, paziente_id: int,
             return
         output_dir = Path(cartella)
 
-    popup = ctk.CTkToplevel(parent_widget)
-    popup.title("Generazione PDF…")
-    popup.geometry("320x110")
-    popup.resizable(False, False)
-    popup.grab_set()
-    ctk.CTkLabel(popup, text="⏳  Generazione dossier PDF…",
-                 font=FONT_NORMALE).pack(expand=True, pady=16)
-    pb = ctk.CTkProgressBar(popup, mode="indeterminate")
-    pb.pack(padx=20, fill="x")
-    pb.start()
+    ToastManager.mostra("⏳  Generazione PDF in corso…", "info", 8000)
     result: dict = {}
 
     def _job():
@@ -129,12 +592,10 @@ def _esporta_pdf_con_feedback(parent_widget, paziente_id: int,
             result["error"] = str(exc)
 
     def _done():
-        popup.destroy()
         if "error" in result:
-            messagebox.showerror("Errore PDF", result["error"], parent=parent_widget)
+            ToastManager.mostra(f"Errore PDF: {result['error']}", "error", 6000)
         else:
-            messagebox.showinfo("PDF Generato",
-                                f"Salvato in:\n{result['path']}", parent=parent_widget)
+            ToastManager.mostra("📄  PDF generato con successo", "success")
 
     threading.Thread(target=lambda: (_job(), parent_widget.after(0, _done)),
                      daemon=True).start()
@@ -182,7 +643,8 @@ class PazientiFrame(ctk.CTkFrame):
         self._entry_cerca = ctk.CTkEntry(lc, placeholder_text="🔍 Cerca…",
                                           font=FONT_NORMALE, height=36)
         self._entry_cerca.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="ew")
-        self._entry_cerca.bind("<KeyRelease>", lambda e: self.aggiorna_lista())
+        self._debounce_id = None
+        self._entry_cerca.bind("<KeyRelease>", self._debounce_ricerca)
 
         self._lista = ctk.CTkScrollableFrame(lc, fg_color="transparent")
         self._lista.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="nsew")
@@ -216,6 +678,15 @@ class PazientiFrame(ctk.CTkFrame):
         self._entry_note.delete("1.0", "end")
         self.aggiorna_lista()
         messagebox.showinfo("Salvato", f"Paziente aggiunto (ID {pid}).")
+
+    def _debounce_ricerca(self, event=None):
+        """Ritarda la ricerca di 250ms dopo l'ultima pressione tasto."""
+        if self._debounce_id:
+            try:
+                self.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+        self._debounce_id = self.after(250, self.aggiorna_lista)
 
     def aggiorna_lista(self, *_):
         righe = db.cerca_pazienti(self._entry_cerca.get())
@@ -386,6 +857,7 @@ class UploadFrame(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(0, weight=1)
 
+        # ── Colonna sinistra: selezione paziente ─────────────────────
         pc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
         pc.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
         pc.grid_columnconfigure(0, weight=1)
@@ -403,6 +875,7 @@ class UploadFrame(ctk.CTkFrame):
                                       text_color=COLORI["testo_grigio"])
         self._lbl_sel.grid(row=3, column=0, padx=20, pady=(0, 16))
 
+        # ── Colonna destra: carica & tagga ───────────────────────────
         uc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
         uc.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
         uc.grid_columnconfigure(0, weight=1)
@@ -411,18 +884,54 @@ class UploadFrame(ctk.CTkFrame):
         ctk.CTkLabel(uc, text="2 · Carica & Tagga", font=FONT_SEZIONE).grid(
             row=0, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
 
-        self._prev = ctk.CTkLabel(uc,
-                                   text="📂  Clicca per scegliere",
-                                   font=FONT_PICCOLO, text_color=COLORI["testo_grigio"],
-                                   width=320, height=200,
-                                   fg_color=COLORI["sfondo_entry"], corner_radius=10)
-        self._prev.grid(row=1, column=0, columnspan=2, padx=20, pady=(8, 4), sticky="ew")
-        self._prev.bind("<Button-1>", lambda e: self._scegli())
+        # ── Zona Drop ────────────────────────────────────────────────
+        self._drop_zone = ctk.CTkLabel(
+            uc,
+            text="",
+            width=320, height=180,
+            fg_color=COLORI["sfondo_entry"],
+            corner_radius=12,
+        )
+        self._drop_zone.grid(row=1, column=0, columnspan=2,
+                              padx=20, pady=(8, 0), sticky="ew")
+        self._drop_zone.bind("<Button-1>", lambda e: self._scegli())
 
-        ctk.CTkButton(uc, text="📂  Scegli Immagine", font=FONT_NORMALE, height=36,
-                      command=self._scegli).grid(row=2, column=0, columnspan=2,
-                                                  padx=20, pady=(4, 14), sticky="ew")
+        # Canvas interno per testo + icona centrati
+        self._drop_canvas = tk.Canvas(
+            self._drop_zone,
+            bg=COLORI["sfondo_entry"],
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self._drop_canvas.place(relwidth=1, relheight=1)
+        self._drop_canvas.bind("<Button-1>", lambda e: self._scegli())
+        self._drop_canvas.bind("<Configure>", lambda e: self._aggiorna_drop_placeholder())
+        self._aggiorna_drop_placeholder()
 
+        # Attiva Drag & Drop se tkinterdnd2 è disponibile
+        self._dnd_attivo = False
+        if _DND_OK:
+            try:
+                self._drop_zone.drop_target_register(DND_FILES)
+                self._drop_zone.dnd_bind("<<Drop>>",    self._on_drop)
+                self._drop_zone.dnd_bind("<<DragEnter>>", self._on_drag_enter)
+                self._drop_zone.dnd_bind("<<DragLeave>>", self._on_drag_leave)
+                self._drop_canvas.drop_target_register(DND_FILES)
+                self._drop_canvas.dnd_bind("<<Drop>>",    self._on_drop)
+                self._drop_canvas.dnd_bind("<<DragEnter>>", self._on_drag_enter)
+                self._drop_canvas.dnd_bind("<<DragLeave>>", self._on_drag_leave)
+                self._dnd_attivo = True
+            except Exception:
+                pass
+
+        # Pulsante sfoglia alternativo
+        ctk.CTkButton(uc, text="📂  Sfoglia…", font=FONT_NORMALE, height=32,
+                      fg_color="transparent", border_width=1,
+                      border_color=COLORI["sidebar_border"],
+                      command=self._scegli).grid(
+            row=2, column=0, columnspan=2, padx=20, pady=(6, 14), sticky="ew")
+
+        # ── Tag clinici ───────────────────────────────────────────────
         self._c_dente  = self._combo_row(uc, "Dente (FDI)", db.DENTI_FDI, 3, 0)
         self._c_branca = self._combo_row(uc, "Branca",      db.BRANCHE,   3, 1)
         self._c_fase   = self._combo_row(uc, "Fase",        db.FASI,      5, 0)
@@ -437,18 +946,93 @@ class UploadFrame(ctk.CTkFrame):
         ctk.CTkLabel(uc, text="Note", font=FONT_PICCOLO,
                      text_color=COLORI["testo_grigio"]).grid(
             row=7, column=0, columnspan=2, padx=20, pady=(0, 2), sticky="w")
-        self._note = ctk.CTkTextbox(uc, font=FONT_NORMALE, height=70)
-        self._note.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 14), sticky="ew")
+        self._note = ctk.CTkTextbox(uc, font=FONT_NORMALE, height=60)
+        self._note.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
 
         self._btn_up = ctk.CTkButton(uc, text="⬆️  Carica",
                                       font=("Segoe UI", 13, "bold"), height=44,
-                                      fg_color=COLORI["accent_bright"], hover_color="#c73652",
+                                      fg_color=COLORI["accent_bright"],
+                                      hover_color="#c73652",
                                       command=self._carica)
-        self._btn_up.grid(row=9, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+        self._btn_up.grid(row=9, column=0, columnspan=2,
+                          padx=20, pady=(0, 12), sticky="ew")
 
         self._stato = ctk.CTkLabel(uc, text="", font=FONT_PICCOLO,
                                     text_color=COLORI["verde_ok"])
         self._stato.grid(row=10, column=0, columnspan=2, pady=(0, 10))
+
+    # ------------------------------------------------------------------
+    # Drop zone helpers
+    # ------------------------------------------------------------------
+
+    _FORMATI_OK = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+
+    def _aggiorna_drop_placeholder(self, evidenzia=False):
+        """Ridisegna il contenuto della drop zone (testo + bordo tratteggiato)."""
+        try:
+            c = self._drop_canvas
+            c.delete("all")
+            w = c.winfo_width()  or 320
+            h = c.winfo_height() or 180
+
+            border_col = "#2563eb" if evidenzia else "#1e3a5f"
+            bg_col     = "#111827" if evidenzia else COLORI["sfondo_entry"]
+            c.configure(bg=bg_col)
+
+            # Bordo tratteggiato simulato
+            dash = (8, 6)
+            c.create_rectangle(8, 8, w-8, h-8,
+                                outline=border_col, width=2, dash=dash)
+
+            if self._file:
+                # Mostra nome file
+                c.create_text(w//2, h//2 - 12,
+                              text="✅  " + self._file.name[:40],
+                              fill="#10b981", font=("Segoe UI", 11, "bold"),
+                              anchor="center")
+                c.create_text(w//2, h//2 + 14,
+                              text="Clicca per cambiare",
+                              fill=COLORI["testo_grigio"],
+                              font=("Segoe UI", 9), anchor="center")
+            elif evidenzia:
+                c.create_text(w//2, h//2 - 8,
+                              text="📂  Rilascia qui",
+                              fill="#2563eb", font=("Segoe UI", 13, "bold"),
+                              anchor="center")
+            else:
+                c.create_text(w//2, h//2 - 16,
+                              text="⬆",
+                              fill="#334155", font=("Segoe UI", 28),
+                              anchor="center")
+                c.create_text(w//2, h//2 + 12,
+                              text="Trascina un'immagine qui",
+                              fill=COLORI["testo_grigio"],
+                              font=("Segoe UI", 11), anchor="center")
+                dnd_hint = "o clicca per sfogliare"
+                c.create_text(w//2, h//2 + 32,
+                              text=dnd_hint,
+                              fill="#334155",
+                              font=("Segoe UI", 9), anchor="center")
+        except Exception:
+            pass
+
+    def _on_drag_enter(self, event):
+        self._aggiorna_drop_placeholder(evidenzia=True)
+        return event.action
+
+    def _on_drag_leave(self, event):
+        self._aggiorna_drop_placeholder(evidenzia=False)
+
+    def _on_drop(self, event):
+        self._aggiorna_drop_placeholder(evidenzia=False)
+        raw = event.data.strip()
+        # tkinterdnd2 su Windows restituisce path tra {} se contengono spazi
+        if raw.startswith("{") and raw.endswith("}"):
+            raw = raw[1:-1]
+        # Prende il primo file in caso di drop multiplo
+        path = Path(raw.split("} {")[0])
+        self._carica_file(path)
+        return event.action
 
     def _combo_row(self, parent, lbl, vals, base_row, col):
         px = (20, 6) if col == 0 else (6, 20)
@@ -486,28 +1070,35 @@ class UploadFrame(ctk.CTkFrame):
 
     def _scegli(self):
         path = filedialog.askopenfilename(
-            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.tiff *.webp")])
+            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp")])
         if not path:
             return
-        self._file = Path(path)
-        thumb = _crea_miniatura(self._file, (320, 200))
-        if thumb:
-            self._prev_img = thumb
-            self._prev.configure(image=thumb, text="")
-        else:
-            self._prev.configure(text="⚠️ File non leggibile", image=None)
+        self._carica_file(Path(path))
+
+    def _carica_file(self, path: Path):
+        """Carica un file (da dialog o drag & drop) e aggiorna la drop zone."""
+        if path.suffix.lower() not in self._FORMATI_OK:
+            ToastManager.mostra(f"Formato non supportato: {path.suffix}", "error")
+            return
+        if not path.exists():
+            ToastManager.mostra("File non trovato.", "error")
+            return
+        self._file = path
+        self._aggiorna_drop_placeholder()
+        self.after(60, self._aggiorna_drop_placeholder)
+        ToastManager.mostra(f"📂  {path.name}", "info", 2500)
 
     def _carica(self):
         if not self._paz_id:
-            messagebox.showwarning("Paziente mancante", "Seleziona un paziente.")
+            ToastManager.mostra("Seleziona un paziente prima di caricare.", "warning")
             return
         if not self._file:
-            messagebox.showwarning("File mancante", "Scegli un'immagine.")
+            ToastManager.mostra("Trascina o scegli un'immagine.", "warning")
             return
         try:
             ds = date.fromisoformat(self._data.get().strip())
         except ValueError:
-            messagebox.showwarning("Data non valida", "Formato: AAAA-MM-GG")
+            ToastManager.mostra("Data non valida — formato: AAAA-MM-GG", "error")
             return
         self._btn_up.configure(state="disabled", text="⏳…")
 
@@ -526,13 +1117,16 @@ class UploadFrame(ctk.CTkFrame):
     def _ok(self, fid):
         self._btn_up.configure(state="normal", text="⬆️  Carica")
         self._file = None
-        self._prev.configure(image=None, text="📂  Clicca per scegliere")
+        self._aggiorna_drop_placeholder()
         self._note.delete("1.0", "end")
-        self._stato.configure(text=f"✅ ID {fid}", text_color=COLORI["verde_ok"])
+        self._stato.configure(text=f"✅  Foto salvata (ID {fid})",
+                               text_color=COLORI["verde_ok"])
+        ToastManager.mostra(f"✅  Foto caricata con successo (ID {fid})", "success")
 
     def _err(self, msg):
         self._btn_up.configure(state="normal", text="⬆️  Carica")
         self._stato.configure(text=f"❌ {msg}", text_color=COLORI["accent_bright"])
+        ToastManager.mostra(f"Errore upload: {msg}", "error")
 
 
 
@@ -681,10 +1275,40 @@ class DashboardFrame(ctk.CTkFrame):
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)   # galleria occupa row 2
 
+        # ── KPI cards ────────────────────────────────────────────────
+        kf = ctk.CTkFrame(self, fg_color="transparent")
+        kf.grid(row=0, column=0, padx=0, pady=(0, 8), sticky="ew")
+        kf.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self._kpi_labels: dict = {}
+        specs_kpi = [
+            ("pazienti",       "👤  Pazienti",       COLORI["accent"]),
+            ("foto_totali",    "📷  Foto totali",     "#1a4d2e"),
+            ("foto_oggi",      "📅  Foto oggi",       "#2a1a4d"),
+            ("foto_settimana", "📈  Ultimi 7 giorni", "#4d2a0a"),
+        ]
+        for col, (chiave, etichetta, colore) in enumerate(specs_kpi):
+            card = ctk.CTkFrame(kf, fg_color=colore, corner_radius=10)
+            card.grid(row=0, column=col,
+                      padx=(0 if col == 0 else 6, 0), sticky="ew")
+            card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(card, text=etichetta,
+                         font=("Segoe UI", 9),
+                         text_color="#9aacc8").grid(
+                row=0, column=0, padx=14, pady=(10, 2), sticky="w")
+            lbl = ctk.CTkLabel(card, text="—",
+                               font=("Segoe UI", 22, "bold"),
+                               text_color=COLORI["testo_chiaro"])
+            lbl.grid(row=1, column=0, padx=14, pady=(0, 10), sticky="w")
+            self._kpi_labels[chiave] = lbl
+
+        self._aggiorna_kpi()
+
+        # ── Filtri ───────────────────────────────────────────────────
         fc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
-        fc.grid(row=0, column=0, padx=0, pady=(0, 8), sticky="ew")
+        fc.grid(row=1, column=0, padx=0, pady=(0, 8), sticky="ew")
         fc.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         ctk.CTkLabel(fc, text="🔍  Filtri", font=FONT_SEZIONE).grid(
@@ -703,9 +1327,12 @@ class DashboardFrame(ctk.CTkFrame):
             if vals is None:
                 w = ctk.CTkEntry(fc, placeholder_text="Cognome…",
                                  font=FONT_NORMALE, height=32)
+                w.bind("<Return>", lambda e: self.esegui_ricerca())
+                w.bind("<KeyRelease>", self._debounce_dashboard)
             else:
                 w = ctk.CTkComboBox(fc, values=vals, font=FONT_NORMALE,
-                                    height=32, state="readonly")
+                                    height=32, state="readonly",
+                                    command=lambda v: self.esegui_ricerca())
                 w.set(vals[0])
             w.grid(row=2, column=col, padx=(20 if col == 0 else 6, 6),
                    pady=(0, 12), sticky="ew")
@@ -728,9 +1355,42 @@ class DashboardFrame(ctk.CTkFrame):
 
         self._galleria = ctk.CTkScrollableFrame(self, fg_color=COLORI["card_bg"],
                                                 corner_radius=12)
-        self._galleria.grid(row=1, column=0, sticky="nsew")
+        self._galleria.grid(row=2, column=0, sticky="nsew")
         for c in range(self.COLS):
             self._galleria.grid_columnconfigure(c, weight=1)
+
+    def _debounce_dashboard(self, event=None):
+        """Attende 400ms di inattività prima di eseguire la ricerca."""
+        if hasattr(self, "_db_id") and self._db_id:
+            try:
+                self.after_cancel(self._db_id)
+            except Exception:
+                pass
+        self._db_id = self.after(400, self.esegui_ricerca)
+
+    def _aggiorna_kpi(self):
+        """Carica le KPI dal DB e aggiorna le card. Eseguito in thread per non bloccare."""
+        def _fetch():
+            try:
+                stats = db.kpi_stats()
+                self.after(0, lambda: self._applica_kpi(stats))
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _applica_kpi(self, stats: dict):
+        mapping = {
+            "pazienti":       str(stats.get("pazienti", "—")),
+            "foto_totali":    str(stats.get("foto_totali", "—")),
+            "foto_oggi":      str(stats.get("foto_oggi", "—")),
+            "foto_settimana": str(stats.get("foto_settimana", "—")),
+        }
+        for chiave, valore in mapping.items():
+            if chiave in self._kpi_labels:
+                try:
+                    self._kpi_labels[chiave].configure(text=valore)
+                except Exception:
+                    pass
 
     def _get(self, w) -> Optional[str]:
         v = w.get().strip()
@@ -764,6 +1424,7 @@ class DashboardFrame(ctk.CTkFrame):
         n = len(self._risultati)
         self._lbl_n.configure(
             text=f"{n} foto trovata/e." if n else "Nessuna foto trovata.")
+        self._aggiorna_kpi()
         self._ridisegna()
 
     def _pdf(self):
@@ -893,8 +1554,6 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        db.init_db()
-        init_auth_db()
         self.title("DentalPhoto — Gestione Fotografie Cliniche")
         self.geometry("1240x780")
         self.minsize(960, 600)
@@ -904,8 +1563,11 @@ class App(ctk.CTk):
         self._foto_mod: Optional[int] = None
         self._lock_aperto = False
         self._build_layout()
+        ToastManager.init(self)
+        self._registra_hotkey()
         self._naviga("dashboard")
         self._avvia_timer_lock()
+        self._avvia_refresh_statusbar()
         # Propaga l'attività a SessioneUtente ad ogni interazione
         self.bind_all("<Motion>",   lambda e: SessioneUtente.registra_attivita())
         self.bind_all("<KeyPress>", lambda e: SessioneUtente.registra_attivita())
@@ -915,13 +1577,14 @@ class App(ctk.CTk):
     def _build_layout(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)   # status bar — altezza fissa
 
         sb = ctk.CTkFrame(self, width=228, corner_radius=0,
                           fg_color=COLORI["sidebar_bg"])
         sb.grid(row=0, column=0, sticky="nsew")
         sb.grid_propagate(False)
         sb.grid_columnconfigure(0, weight=1)
-        sb.grid_rowconfigure(10, weight=1)
+        sb.grid_rowconfigure(15, weight=1)  # riga vuota di spaziatura tra nav e bottom bar
 
         # ── Logo ──
         lf = ctk.CTkFrame(sb, fg_color="transparent")
@@ -941,13 +1604,29 @@ class App(ctk.CTk):
             text_color=COLORI["testo_grigio"],
             padx=8, pady=4,
         )
-        self._lbl_utente_badge.grid(row=1, column=0, padx=12, pady=(0, 6), sticky="ew")
+        self._lbl_utente_badge.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="ew")
+
+        # Pulsante ricerca globale Ctrl+K
+        ctk.CTkButton(
+            sb,
+            text="🔍  Cerca…       Ctrl+K",
+            font=("Segoe UI", 9),
+            height=26,
+            fg_color=COLORI["sfondo_entry"],
+            hover_color=COLORI["nav_active"],
+            border_width=1,
+            border_color=COLORI["sidebar_border"],
+            corner_radius=6,
+            text_color=COLORI["testo_grigio"],
+            anchor="w",
+            command=self._apri_spotlight,
+        ).grid(row=2, column=0, padx=12, pady=(0, 4), sticky="ew")
 
         ctk.CTkFrame(sb, height=1, fg_color=COLORI["sidebar_border"]).grid(
-            row=2, column=0, padx=14, pady=(0, 6), sticky="ew")
+            row=3, column=0, padx=14, pady=(0, 6), sticky="ew")
 
         self._nav_btns: dict = {}
-        for i, (lbl, key) in enumerate(self.VOCI_NAV, start=3):
+        for i, (lbl, key) in enumerate(self.VOCI_NAV, start=4):
             # Nascondi "Utenti" ai non-admin
             if key == "utenti" and not SessioneUtente.is_admin():
                 continue
@@ -960,11 +1639,11 @@ class App(ctk.CTk):
 
         # Bottom bar
         ctk.CTkFrame(sb, height=1, fg_color=COLORI["sidebar_border"]).grid(
-            row=14, column=0, padx=14, pady=(0, 6), sticky="ew")
+            row=16, column=0, padx=14, pady=(0, 6), sticky="ew")
 
         # Riga bottoni bottom
         bot = ctk.CTkFrame(sb, fg_color="transparent")
-        bot.grid(row=15, column=0, padx=8, pady=(0, 4), sticky="ew")
+        bot.grid(row=17, column=0, padx=8, pady=(0, 4), sticky="ew")
         bot.grid_columnconfigure(0, weight=1)
 
         ctk.CTkButton(
@@ -993,11 +1672,11 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(sb, text="Tema", font=("Segoe UI", 9),
                      text_color=COLORI["testo_grigio"]).grid(
-            row=16, column=0, padx=14, pady=(6, 2), sticky="w")
+            row=18, column=0, padx=14, pady=(6, 2), sticky="w")
         ctk.CTkOptionMenu(sb, values=["Dark", "Light", "System"],
                           font=("Segoe UI", 9), height=26,
                           command=lambda t: ctk.set_appearance_mode(t.lower())).grid(
-            row=17, column=0, padx=8, pady=(0, 14), sticky="ew")
+            row=19, column=0, padx=8, pady=(0, 14), sticky="ew")
 
         # Content area
         self._content = ctk.CTkFrame(self, fg_color="transparent")
@@ -1013,6 +1692,172 @@ class App(ctk.CTk):
         self._fc.grid_columnconfigure(0, weight=1)
         self._fc.grid_rowconfigure(0, weight=1)
 
+        # ── Status bar ───────────────────────────────────────────────
+        sb_bar = ctk.CTkFrame(self, height=28, corner_radius=0,
+                              fg_color=COLORI["sidebar_bg"],
+                              border_width=1,
+                              border_color=COLORI["sidebar_border"])
+        sb_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        sb_bar.grid_propagate(False)
+        sb_bar.grid_columnconfigure(1, weight=1)
+
+        # Sezione sinistra: utente
+        self._sb_utente = ctk.CTkLabel(
+            sb_bar, text="", font=("Segoe UI", 9),
+            text_color=COLORI["testo_grigio"])
+        self._sb_utente.grid(row=0, column=0, padx=(12, 0), sticky="w")
+
+        # Separatore
+        ctk.CTkFrame(sb_bar, width=1, height=16,
+                     fg_color=COLORI["sidebar_border"]).grid(
+            row=0, column=1, padx=8, sticky="")
+
+        # Sezione centrale: statistiche
+        self._sb_stats = ctk.CTkLabel(
+            sb_bar, text="", font=("Segoe UI", 9),
+            text_color=COLORI["testo_grigio"])
+        self._sb_stats.grid(row=0, column=1, padx=0, sticky="w")
+
+        # Sezione destra: db size + backup
+        self._sb_backup = ctk.CTkLabel(
+            sb_bar, text="", font=("Segoe UI", 9),
+            text_color=COLORI["testo_grigio"])
+        self._sb_backup.grid(row=0, column=2, padx=(0, 12), sticky="e")
+
+    # ------------------------------------------------------------------
+
+    def toast(self, messaggio: str, tipo: str = "info", durata_ms: int = 3500):
+        """Scorciatoia per mostrare una notifica toast."""
+        ToastManager.mostra(messaggio, tipo, durata_ms)
+
+    # ------------------------------------------------------------------
+    # Hotkey globali
+    # ------------------------------------------------------------------
+
+    def _registra_hotkey(self):
+        """
+        Registra le scorciatoie da tastiera globali dell'applicazione.
+
+        Ctrl+1…9  → naviga alla voce N della sidebar
+        Ctrl+N    → nuovo paziente (apre sezione Pazienti)
+        Ctrl+F    → focus sulla ricerca (Dashboard)
+        F5        → aggiorna la pagina corrente
+        Ctrl+B    → backup rapido
+        """
+        VOCI = [v[1] for v in self.VOCI_NAV]   # lista chiavi in ordine
+
+        for i, chiave in enumerate(VOCI[:9], start=1):
+            self.bind_all(
+                f"<Control-Key-{i}>",
+                lambda e, k=chiave: self._naviga(k),
+                add="+",
+            )
+
+        self.bind_all("<Control-n>",
+                      lambda e: self._naviga("pazienti"), add="+")
+        self.bind_all("<Control-N>",
+                      lambda e: self._naviga("pazienti"), add="+")
+        self.bind_all("<Control-b>",
+                      lambda e: self._backup_rapido(), add="+")
+        self.bind_all("<Control-B>",
+                      lambda e: self._backup_rapido(), add="+")
+        self.bind_all("<F5>",
+                      lambda e: self._refresh_pagina(), add="+")
+        self.bind_all("<Control-f>",
+                      lambda e: self._focus_ricerca(), add="+")
+        self.bind_all("<Control-F>",
+                      lambda e: self._focus_ricerca(), add="+")
+        self.bind_all("<Control-k>",
+                      lambda e: self._apri_spotlight(), add="+")
+        self.bind_all("<Control-K>",
+                      lambda e: self._apri_spotlight(), add="+")
+
+    def _refresh_pagina(self):
+        """F5 — aggiorna la sezione corrente."""
+        pag = self._pagina
+        if pag == "dashboard" and "dashboard" in self._frames:
+            self._frames["dashboard"].esegui_ricerca()
+            self._frames["dashboard"]._aggiorna_kpi()
+        elif pag == "pazienti" and "pazienti" in self._frames:
+            self._frames["pazienti"].aggiorna_lista()
+        elif pag == "statistiche" and "statistiche" in self._frames:
+            self._frames["statistiche"].aggiorna_tutto()
+        self._aggiorna_statusbar()
+        self.toast("Pagina aggiornata", "info", 1800)
+
+    def _focus_ricerca(self):
+        """Ctrl+F — porta il focus sulla ricerca della Dashboard."""
+        self._naviga("dashboard")
+        try:
+            self._frames["dashboard"]._fp.focus_set()
+        except Exception:
+            pass
+
+    def _apri_spotlight(self):
+        """Ctrl+K — apre il popup di ricerca globale."""
+        SpotlightSearch(
+            self,
+            on_apri_paziente=self._spotlight_apri_paziente,
+            on_apri_foto=self._spotlight_apri_foto,
+        )
+
+    def _spotlight_apri_paziente(self, pid: int):
+        """Callback spotlight: naviga a Upload con il paziente preselezionato."""
+        self._goto_upload(pid)
+        self.toast(f"Paziente caricato", "info", 2000)
+
+    def _spotlight_apri_foto(self, foto_id: int, foto_data):
+        """Callback spotlight: apre il DettaglioFoto."""
+        try:
+            percorso = db.get_percorso_assoluto(foto_data)
+            DettaglioFoto(self, percorso, foto_data,
+                          on_modifica_tag=self._goto_modifica,
+                          tutti_risultati=[foto_data], indice=0)
+        except Exception as e:
+            self.toast(f"Errore apertura foto: {e}", "error")
+
+    # ------------------------------------------------------------------
+    # Status bar
+    # ------------------------------------------------------------------
+
+    def _avvia_refresh_statusbar(self):
+        """Primo aggiornamento immediato + timer ogni 60s."""
+        self._aggiorna_statusbar()
+        self.after(60_000, self._avvia_refresh_statusbar)
+
+    def _aggiorna_statusbar(self):
+        """Aggiorna i label della status bar con i dati aggiornati dal DB."""
+        def _fetch():
+            try:
+                stats = db.kpi_stats()
+                utente = SessioneUtente.nome_display() if SessioneUtente.corrente else "—"
+                self.after(0, lambda: self._applica_statusbar(stats, utente))
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _applica_statusbar(self, stats: dict, utente: str):
+        try:
+            self._sb_utente.configure(
+                text=f"👤  {utente}"
+            )
+            self._sb_stats.configure(
+                text=(f"Pazienti: {stats['pazienti']}   "
+                      f"Foto: {stats['foto_totali']}   "
+                      f"Oggi: {stats['foto_oggi']}   "
+                      f"DB: {stats['db_size_mb']} MB")
+            )
+            bk = stats.get("ultimo_backup")
+            if bk:
+                import datetime
+                mtime = datetime.datetime.fromtimestamp(bk.stat().st_mtime)
+                bk_txt = f"💾  Backup: {mtime.strftime('%d/%m/%Y %H:%M')}"
+            else:
+                bk_txt = "💾  Nessun backup"
+            self._sb_backup.configure(text=bk_txt)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
 
     def _naviga(self, key: str):
@@ -1020,10 +1865,7 @@ class App(ctk.CTk):
             return
         # Controllo permessi: operatori non possono accedere a backup/utenti
         if SessioneUtente.corrente and not SessioneUtente.ha_permesso(key):
-            messagebox.showwarning(
-                "Accesso negato",
-                f"Il tuo ruolo non consente l'accesso a questa sezione.",
-                parent=self)
+            self.toast("Accesso negato: ruolo insufficiente", "error")
             return
         self._pagina = key
         for k, b in self._nav_btns.items():
@@ -1073,6 +1915,7 @@ class App(ctk.CTk):
         elif key == "upload" and self._paz_upload:
             self._frames["upload"].imposta_paziente(self._paz_upload)
             self._paz_upload = None
+        self._aggiorna_statusbar()
 
     def _build_frame(self, key: str) -> ctk.CTkFrame:
         if key == "dashboard":
@@ -1136,15 +1979,11 @@ class App(ctk.CTk):
 
     def _backup_rapido(self):
         """Backup immediato nella cartella dell'app senza dialogo."""
-        popup = ctk.CTkToplevel(self)
-        popup.title("Backup rapido…")
-        popup.geometry("300x100")
-        popup.resizable(False, False)
-        popup.grab_set()
-        ctk.CTkLabel(popup, text="⏳  Backup in corso…", font=FONT_NORMALE).pack(expand=True)
-        pb = ctk.CTkProgressBar(popup, mode="indeterminate")
-        pb.pack(padx=20, fill="x", pady=(0, 16))
-        pb.start()
+        if hasattr(self, '_backup_in_corso') and self._backup_in_corso:
+            self.toast("Backup già in corso…", "warning")
+            return
+        self._backup_in_corso = True
+        self.toast("⏳  Backup in corso…", "info", 8000)
         result: dict = {}
 
         def _job():
@@ -1154,12 +1993,12 @@ class App(ctk.CTk):
                 result["err"] = str(e)
 
         def _done():
-            popup.destroy()
+            self._backup_in_corso = False
             if "err" in result:
-                messagebox.showerror("Backup fallito", result["err"])
+                self.toast(f"Backup fallito: {result['err']}", "error", 6000)
             else:
-                messagebox.showinfo("Backup completato",
-                                    f"✅  Salvato in:\n{result['path']}")
+                self.toast(f"✅  Backup salvato con successo", "success")
+            self._aggiorna_statusbar()
 
         threading.Thread(
             target=lambda: (_job(), self.after(0, _done)),
@@ -1202,15 +2041,25 @@ def _fix_scrollwheel(root):
 
 
 if __name__ == "__main__":
-    # ── Login screen ────────────────────────────────────────────────
+    # 1. Inizializza i database PRIMA di caricare qualsiasi interfaccia
+    import database as db
+    from auth import init_auth_db
+    
+    # ECCO LE DUE RIGHE CHE MANCAVANO:
+    db.init_db()
+    init_auth_db()
+
+    # 2. Avvia la schermata di Login come blocco principale
     from ui_login import LoginScreen
     login = LoginScreen()
     login.mainloop()
 
-    if not login.login_riuscito:
-        import sys; sys.exit(0)
+    # 3. Barriera di sicurezza: se la finestra viene chiusa senza successo, termina
+    if not hasattr(login, 'login_riuscito') or not login.login_riuscito:
+        import sys
+        sys.exit(0)
 
-    # ── App principale ──────────────────────────────────────────────
+    # 4. Solo a credenziali validate, costruisci e mostra la Dashboard
     app = App()
     _fix_scrollwheel(app)
     app.mainloop()
