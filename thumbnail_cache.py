@@ -98,13 +98,16 @@ def get_thumbnail(percorso: Path, size: tuple[int, int] = (180, 140)) -> ctk.CTk
 
 
 def invalida_cache(percorso: Path) -> None:
-    """Elimina tutte le voci di cache per un dato file originale."""
     try:
-        nome_base = percorso.name
-        for f in THUMBS_DIR.glob("*.jpg"):
-            # Approccio conservativo: rigenera tutto per questo file
-            # (il nome hash già incorpora il mtime, quindi cambierà da solo)
-            pass
+        mtime = str(percorso.stat().st_mtime)
+    except OSError:
+        mtime = "0"
+    try:
+        for size in [(180, 140), (200, 150), (100, 76), (64, 48)]:
+            chiave = f"{percorso}|{mtime}|{size[0]}x{size[1]}"
+            nome = hashlib.md5(chiave.encode()).hexdigest() + ".jpg"
+            cache = THUMBS_DIR / nome
+            cache.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -118,11 +121,11 @@ def pulisci_cache_orfana() -> int:
     try:
         file_originali = {f.name for f in db.IMAGES_DIR.glob("*")
                          if f.is_file() and f.name != ".thumbs"}
+        cutoff = time.time() - (7 * 86400)  # elimina solo thumbnail > 7 giorni
         for thumb in THUMBS_DIR.glob("*.jpg"):
-            # Senza accesso al percorso originale dall'hash non possiamo
-            # verificare 1:1, ma possiamo eliminare le cache molto vecchie
-            thumb.unlink()
-            eliminati += 1
+            if thumb.stat().st_mtime < cutoff:
+                thumb.unlink()
+                eliminati += 1
     except Exception:
         pass
     return eliminati

@@ -20,7 +20,7 @@ Restore:
 Uso standalone:
     from backup_restore import esegui_backup, esegui_restore
 """
-
+import gc
 import zipfile
 import shutil
 import sqlite3

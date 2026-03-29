@@ -382,7 +382,12 @@ class EmailFrame(ctk.CTkFrame):
                 if self._chk_foto.get():
                     foto_rows = db.cerca_foto(paziente_id=paz_id)[:5]
                     for r in foto_rows: allegati.append(db.get_percorso_assoluto(r))
-
+                r = self._paz_row
+                if r:
+                    try:
+                        corpo = corpo.format(nome=r["nome"], cognome=r["cognome"])
+                    except KeyError:
+                        pass    
                 invia_email(dest, oggetto, corpo, allegati, cfg,
                             on_progress=lambda m: self.after(0, self._log, m))
 
