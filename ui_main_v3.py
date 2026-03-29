@@ -2067,25 +2067,45 @@ def _fix_scrollwheel(root):
 
 
 if __name__ == "__main__":
-    # 1. Inizializza i database PRIMA di caricare qualsiasi interfaccia
     import database as db
     from auth import init_auth_db
-    
-    # ECCO LE DUE RIGHE CHE MANCAVANO:
+    import logging
+    import traceback
+
+    # --- 1. CONFIGURAZIONE LOGGING GLOBALE ---
+    # Crea un file 'errori_app.log' nella stessa cartella sicura del DB
+    log_path = db.APP_DIR / "errori_app.log"
+    logging.basicConfig(
+        filename=str(log_path),
+        level=logging.ERROR,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+    # Intercettatore per i crash dell'interfaccia (Tkinter)
+    def gestore_errori_ui(exc_type, exc_value, exc_traceback):
+        logging.error("CRASH INTERFACCIA:", exc_info=(exc_type, exc_value, exc_traceback))
+        print(f"⚠️ ERRORE SALVATO NEL LOG: {exc_value}")
+
+    # --- 2. INIZIALIZZAZIONE DATABASE ---
     db.init_db()
     init_auth_db()
 
-    # 2. Avvia la schermata di Login come blocco principale
+    # --- 3. AVVIO SCHERMATA LOGIN ---
     from ui_login import LoginScreen
     login = LoginScreen()
+    
+    # Agganciamo l'intercettatore globale al Login
+    login.report_callback_exception = gestore_errori_ui
     login.mainloop()
 
-    # 3. Barriera di sicurezza: se la finestra viene chiusa senza successo, termina
+    # 4. Barriera di sicurezza: termina se si chiude il login con la 'X'
     if not hasattr(login, 'login_riuscito') or not login.login_riuscito:
         import sys
         sys.exit(0)
 
-    # 4. Solo a credenziali validate, costruisci e mostra la Dashboard
+    # --- 5. AVVIO APP PRINCIPALE ---
     app = App()
+    # Agganciamo l'intercettatore globale all'App principale
+    app.report_callback_exception = gestore_errori_ui 
     _fix_scrollwheel(app)
     app.mainloop()

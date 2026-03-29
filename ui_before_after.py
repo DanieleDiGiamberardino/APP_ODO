@@ -375,7 +375,7 @@ class BeforeAfterCanvas(tk.Canvas):
         # Linea
         self.create_line(x, 0, x, H, fill="#ffffff", width=SLIDER_W)
         # Glow
-        self.create_line(x, 0, x, H, fill=C["accent"] + "55",
+        self.create_line(x, 0, x, H, fill=C["accent"],
                          width=SLIDER_W + 4)
         # Maniglia
         cy = H // 2
@@ -411,7 +411,7 @@ class BeforeAfterCanvas(tk.Canvas):
         else:
             x0, y0 = x - tw, y
         self.create_rectangle(x0, y0, x0 + tw, y0 + th,
-                               fill=color + "cc", outline="", width=0)
+                               fill=color, outline="", width=0)
         cx = x0 + tw // 2
         cy = y0 + th // 2
         self.create_text(cx, cy,
