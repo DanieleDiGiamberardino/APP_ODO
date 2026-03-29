@@ -985,15 +985,29 @@ class UploadFrame(ctk.CTkFrame):
                                 outline=border_col, width=2, dash=dash)
 
             if self._file:
-                # Mostra nome file
-                c.create_text(w//2, h//2 - 12,
-                              text="✅  " + self._file.name[:40],
-                              fill="#10b981", font=("Segoe UI", 11, "bold"),
-                              anchor="center")
-                c.create_text(w//2, h//2 + 14,
-                              text="Clicca per cambiare",
-                              fill=COLORI["testo_grigio"],
-                              font=("Segoe UI", 9), anchor="center")
+                try:
+                    from PIL import ImageTk
+                    # Apre l'immagine e la ridimensiona mantenendo le proporzioni
+                    img = Image.open(self._file)
+                    img.thumbnail((w - 20, h - 20), Image.LANCZOS)
+                    
+                    # Salva in self._prev_img per evitare che venga eliminata dal Garbage Collector
+                    self._prev_img = ImageTk.PhotoImage(img)
+                    
+                    # Mostra la preview centrata nel canvas
+                    c.create_image(w//2, h//2, image=self._prev_img, anchor="center")
+                    
+                except Exception:
+                    # Fallback: se l'immagine non è leggibile mostra il nome del file
+                    c.create_text(w//2, h//2 - 12,
+                                  text="✅  " + self._file.name[:40],
+                                  fill="#10b981", font=("Segoe UI", 11, "bold"),
+                                  anchor="center")
+                    c.create_text(w//2, h//2 + 14,
+                                  text="Clicca per cambiare",
+                                  fill=COLORI["testo_grigio"],
+                                  font=("Segoe UI", 9), anchor="center")
+                                  
             elif evidenzia:
                 c.create_text(w//2, h//2 - 8,
                               text="📂  Rilascia qui",
@@ -1535,8 +1549,20 @@ class DashboardFrame(ctk.CTkFrame):
 # ===========================================================================
 # APPLICAZIONE PRINCIPALE
 # ===========================================================================
+# ===========================================================================
+# APPLICAZIONE PRINCIPALE
+# ===========================================================================
 
-class App(ctk.CTk):
+# Aggiungi questo blocco:
+if _DND_OK:
+    class DnDCTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
+else:
+    DnDCTk = ctk.CTk
+
+class App(DnDCTk):
     VOCI_NAV = [
         ("📋  Dashboard",    "dashboard"),
         ("👤  Pazienti",     "pazienti"),

@@ -188,6 +188,10 @@ def init_db() -> None:
         ("anamnesi",         "TEXT"),
         ("farmaci",          "TEXT"),
         ("gruppo_sanguigno", "TEXT"),
+        ("sesso",            "TEXT"),
+        ("stato_civile",     "TEXT"),
+        ("professione",      "TEXT"),
+        ("luogo_nascita",    "TEXT"),
     ]
     with get_connection() as conn:
         for colonna, tipo in nuove_colonne_pazienti:
@@ -276,6 +280,7 @@ def aggiorna_paziente(paziente_id: int, **campi) -> None:
         "nome", "cognome", "telefono", "email", "indirizzo",
         "data_nascita", "codice_fiscale", "medico_curante",
         "allergie", "anamnesi", "farmaci", "gruppo_sanguigno", "note",
+        "sesso", "stato_civile", "professione", "luogo_nascita",
     }
     set_parts, params = [], []
     for k, v in campi.items():
