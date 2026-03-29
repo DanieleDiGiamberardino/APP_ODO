@@ -18,7 +18,8 @@ Navigazione sidebar:
 
 Pulsante rapido "💾 Backup" in fondo alla sidebar.
 """
-
+import sys
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -52,6 +53,8 @@ from ui_before_after import BeforeAfterFrame
 from ui_email import EmailFrame
 from ui_timeline import TimelineFrame
 
+# DEBUG_MODE è True se avvii lo script, False se è un file .exe compilato
+DEBUG_MODE = not getattr(sys, 'frozen', False)
 # ---------------------------------------------------------------------------
 # Tema
 # ---------------------------------------------------------------------------
@@ -1581,7 +1584,19 @@ class App(DnDCTk):
     def __init__(self):
         super().__init__()
         self.title("DentalPhoto — Gestione Fotografie Cliniche")
-        self.geometry("1240x780")
+        self.geometry("1280x800")
+        # --- IMPOSTAZIONE ICONA FINESTRA (Runtime) ---
+        icon_path = Path(__file__).parent / "Icon_APP.jpg"
+        if icon_path.exists():
+            try:
+                from PIL import Image, ImageTk
+                pil_img = Image.open(icon_path)
+                tk_icon = ImageTk.PhotoImage(pil_img)
+                self.wm_iconphoto(False, tk_icon)
+                self._icon_reference = tk_icon
+                print("Icona caricata.")
+            except Exception as e:
+                print(f"Errore icona: {e}")
         self.minsize(960, 600)
         self._pagina = ""
         self._frames: dict = {}
@@ -2068,44 +2083,54 @@ def _fix_scrollwheel(root):
 
 if __name__ == "__main__":
     import database as db
-    from auth import init_auth_db
+    from auth import init_auth_db, SessioneUtente
     import logging
-    import traceback
 
-    # --- 1. CONFIGURAZIONE LOGGING GLOBALE ---
-    # Crea un file 'errori_app.log' nella stessa cartella sicura del DB
-    log_path = db.APP_DIR / "errori_app.log"
+    # 1. Inizializziamo il Logging (crea un file errori_app.log nella cartella dei dati)
     logging.basicConfig(
-        filename=str(log_path),
+        filename=str(db.APP_DIR / "errori_app.log"),
         level=logging.ERROR,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
 
-    # Intercettatore per i crash dell'interfaccia (Tkinter)
-    def gestore_errori_ui(exc_type, exc_value, exc_traceback):
-        logging.error("CRASH INTERFACCIA:", exc_info=(exc_type, exc_value, exc_traceback))
-        print(f"⚠️ ERRORE SALVATO NEL LOG: {exc_value}")
-
-    # --- 2. INIZIALIZZAZIONE DATABASE ---
+    # 2. Inizializziamo i Database (Pazienti e Utenti)
     db.init_db()
     init_auth_db()
 
-    # --- 3. AVVIO SCHERMATA LOGIN ---
-    from ui_login import LoginScreen
-    login = LoginScreen()
-    
-    # Agganciamo l'intercettatore globale al Login
-    login.report_callback_exception = gestore_errori_ui
-    login.mainloop()
+    # 3. Gestione dell'accesso
+    login_successo = False
 
-    # 4. Barriera di sicurezza: termina se si chiude il login con la 'X'
-    if not hasattr(login, 'login_riuscito') or not login.login_riuscito:
-        import sys
-        sys.exit(0)
+    if DEBUG_MODE:
+        # Tenta di loggare automaticamente l'admin per velocizzare il debug
+        with db.get_connection() as conn:
+            admin = conn.execute("SELECT * FROM utenti WHERE username = 'admin'").fetchone()
+            if admin:
+                SessioneUtente.login(admin)
+                login_successo = True
+                print("--- DEBUG MODE: Login bypassato (Admin) ---")
+            else:
+                # Se l'admin non esiste (primo avvio in assoluto), apriamo il login
+                from ui_login import LoginScreen
+                win_login = LoginScreen()
+                win_login.mainloop()
+                login_successo = getattr(win_login, 'login_riuscito', False)
+    else:
+        # Modalità normale per il pubblico
+        from ui_login import LoginScreen
+        win_login = LoginScreen()
+        win_login.mainloop()
+        login_successo = getattr(win_login, 'login_riuscito', False)
 
-    # --- 5. AVVIO APP PRINCIPALE ---
-    app = App()
-    # Agganciamo l'intercettatore globale all'App principale
-    app.report_callback_exception = gestore_errori_ui 
-    _fix_scrollwheel(app)
-    app.mainloop()
+    # 4. Avvio dell'applicazione principale solo se il login è ok
+    if login_successo:
+        app = App()
+        # Funzione opzionale per sistemare la rotella del mouse su Windows
+        if "_fix_scrollwheel" in globals():
+            _fix_scrollwheel(app)
+        
+        # Intercettatore globale di errori per la UI
+        def handle_exception(exc_type, exc_value, exc_traceback):
+            logging.error("Errore non gestito:", exc_info=(exc_type, exc_value, exc_traceback))
+        
+        app.report_callback_exception = handle_exception
+        app.mainloop()

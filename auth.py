@@ -142,11 +142,6 @@ def _verifica_hash(password: str, hash_memorizzato: str, salt: str) -> bool:
 # ===========================================================================
 
 def init_auth_db() -> None:
-    """
-    Crea le tabelle di autenticazione se non esistono.
-    Se non esiste ancora nessun utente, crea l'admin di default.
-    Sicuro da chiamare ad ogni avvio.
-    """
     with db.get_connection() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS utenti (
@@ -157,25 +152,35 @@ def init_auth_db() -> None:
                 salt         TEXT    NOT NULL,
                 ruolo        TEXT    NOT NULL DEFAULT 'operatore',
                 attivo       INTEGER NOT NULL DEFAULT 1,
+                richiede_cambio INTEGER NOT NULL DEFAULT 0,
                 creato_il    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ultimo_login  TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS log_accessi (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                utente_id   INTEGER REFERENCES utenti(id),
-                username    TEXT,
-                esito       TEXT,    -- 'ok' | 'fallito'
-                ip_host     TEXT,
-                timestamp   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                username   TEXT,
+                timestamp  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                esito      TEXT,
+                ip_host    TEXT
             );
         """)
 
-    # Admin di default (solo se DB utenti è vuoto)
+    # --- MIGRAZIONE: Aggiunta colonna se non esiste ---
+    try:
+        with db.get_connection() as conn:
+            conn.execute("ALTER TABLE utenti ADD COLUMN richiede_cambio INTEGER NOT NULL DEFAULT 0")
+    except:
+        pass
+
+    # --- ADMIN DI DEFAULT ---
     with db.get_connection() as conn:
         n = conn.execute("SELECT COUNT(*) FROM utenti").fetchone()[0]
-    if n == 0:
-        crea_utente("admin", "admin1234", "Amministratore", "admin")
+        if n == 0:
+            crea_utente("admin", "admin1234", "Amministratore", "admin")
+            # Forziamo il cambio password solo per il primo admin creato
+            conn.execute("UPDATE utenti SET richiede_cambio = 1 WHERE username = 'admin'")
+
 
 
 # ===========================================================================

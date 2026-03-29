@@ -236,6 +236,10 @@ class LoginScreen(ctk.CTk):
     def _on_result(self, ok, msg):
         self._ferma_anim()
         if ok:
+            if SessioneUtente.corrente["richiede_cambio"]:
+                self._mostra_cambio_obbligatorio()
+                return
+        if ok:
             self._btn_login.configure(text="✓  Accesso effettuato",
                                        fg_color=T["verde"], state="disabled")
             self.login_riuscito = True
@@ -287,7 +291,18 @@ class LoginScreen(ctk.CTk):
             jid = self.after(i * 40,
                              lambda d=dx: self._inner.grid_configure(padx=base+d))
             self._shake_jobs.append(jid)
-
+    def _mostra_cambio_obbligatorio(self):
+            nuova_pwd = ctk.CTkInputDialog(text="Al primo accesso è obbligatorio cambiare la password.\nMinimo 6 caratteri:", title="Sicurezza").get_input()
+            if nuova_pwd and len(nuova_pwd) >= 6:
+                import auth
+                auth.cambia_password(SessioneUtente.corrente["id"], nuova_pwd)
+                with auth.db.get_connection() as conn:
+                    conn.execute("UPDATE utenti SET richiede_cambio = 0 WHERE id = ?", (SessioneUtente.corrente["id"],))
+                self.login_riuscito = True
+                self.destroy()
+            else:
+                self._mostra_errore("Password troppo corta. Riprova.")
+                self._btn_login.configure(state="normal", text="Accedi")
 
 # ===========================================================================
 # LOCK SCREEN
