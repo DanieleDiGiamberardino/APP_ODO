@@ -14,7 +14,6 @@ Contenuto:
 
 import tkinter as tk
 import customtkinter as ctk
-from typing import Optional
 from datetime import date
 
 import database as db

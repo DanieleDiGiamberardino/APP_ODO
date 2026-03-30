@@ -209,3 +209,26 @@ class WebcamFrame(ctk.CTkFrame):
             self._cap.release()
             self._cap = None
         super().destroy()
+    # --------------------------------------------------- Risparmio Risorse --
+    def disattiva(self):
+        """Spegne la fotocamera e rilascia le risorse."""
+        self._running = False
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+            self._after_id = None
+        if self._cap is not None and self._cap.isOpened():
+            self._cap.release()
+            self._cap = None
+        # Pulisce il canvas
+        self._canvas.delete("all")
+        self._canvas.create_text(
+            self._canvas.winfo_width() // 2, 
+            self._canvas.winfo_height() // 2, 
+            text="📷 Fotocamera in pausa", 
+            fill="#4a6080", font=("Segoe UI", 16)
+        )
+
+    def attiva(self):
+        """Riaccende la fotocamera."""
+        if not self._running:
+            self._start_camera(self._cam_index)

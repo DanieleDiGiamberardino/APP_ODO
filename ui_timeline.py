@@ -23,14 +23,9 @@ Struttura timeline:
 Click sulla thumbnail → apre il viewer zoomabile.
 """
 
-import tkinter as tk
-from tkinter import messagebox
 import customtkinter as ctk
-from PIL import Image
-from pathlib import Path
 from typing import Optional
 from itertools import groupby
-from datetime import date
 
 import database as db
 
@@ -249,8 +244,6 @@ class TimelineFrame(ctk.CTkFrame):
         Organizza le righe in gruppi Anno > Mese > Branca
         e costruisce i widget nella scrollable area.
         """
-        from thumbnail_cache import get_thumbnail
-        from ui_viewer import ViewerFoto
 
         # Raggruppa per (anno, mese)
         def anno_mese(r):

@@ -1,0 +1,904 @@
+E702 Multiple statements on one line (semicolon)
+   --> auth.py:232:41
+    |
+230 |     parts, params = [], []
+231 |     if nome_display is not None:
+232 |         parts.append("nome_display = ?"); params.append(nome_display.strip())
+    |                                         ^
+233 |     if ruolo is not None:
+234 |         if ruolo not in RUOLI:
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> auth.py:236:34
+    |
+234 |         if ruolo not in RUOLI:
+235 |             raise ValueError(f"Ruolo non valido: {ruolo}")
+236 |         parts.append("ruolo = ?"); params.append(ruolo)
+    |                                  ^
+237 |     if attivo is not None:
+238 |         parts.append("attivo = ?"); params.append(1 if attivo else 0)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> auth.py:238:35
+    |
+236 |         parts.append("ruolo = ?"); params.append(ruolo)
+237 |     if attivo is not None:
+238 |         parts.append("attivo = ?"); params.append(1 if attivo else 0)
+    |                                   ^
+239 |     if not parts:
+240 |         return
+    |
+
+E402 Module level import not at top of file
+   --> backup_restore.py:215:1
+    |
+214 | # Importati qui per non circolarizzare
+215 | from tkinter import filedialog, messagebox
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+216 | import customtkinter as ctk
+217 | import threading
+    |
+
+E402 Module level import not at top of file
+   --> backup_restore.py:216:1
+    |
+214 | # Importati qui per non circolarizzare
+215 | from tkinter import filedialog, messagebox
+216 | import customtkinter as ctk
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+217 | import threading
+    |
+
+E402 Module level import not at top of file
+   --> backup_restore.py:217:1
+    |
+215 | from tkinter import filedialog, messagebox
+216 | import customtkinter as ctk
+217 | import threading
+    | ^^^^^^^^^^^^^^^^
+218 |
+219 | COLORI_UI = {
+    |
+
+E701 Multiple statements on one line (colon)
+  --> database.py:64:17
+   |
+63 | def crittografa(testo: str) -> str:
+64 |     if not testo: return ""
+   |                 ^
+65 |     return _fernet.encrypt(str(testo).encode("utf-8")).decode("utf-8")
+   |
+
+E701 Multiple statements on one line (colon)
+  --> database.py:68:25
+   |
+67 | def decrittografa(testo_cifrato: str) -> str:
+68 |     if not testo_cifrato: return ""
+   |                         ^
+69 |     try:
+70 |         return _fernet.decrypt(testo_cifrato.encode("utf-8")).decode("utf-8")
+   |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:204:13
+    |
+202 |     with get_connection() as conn:
+203 |         r = conn.execute("SELECT * FROM pazienti WHERE id = ?", (paziente_id,)).fetchone()
+204 |     if not r: return None
+    |             ^
+205 |     paz = dict(r)
+206 |     paz["nome"] = decrittografa(paz["nome"])
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:232:21
+    |
+230 |             params.append(valore)
+231 |             
+232 |     if not set_parts: return
+    |                     ^
+233 |     params.append(paziente_id)
+234 |     with get_connection() as conn:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:277:35
+    |
+275 |                 dente: str = "", branca: str = "", fase: str = "", note: str = "") -> int:
+276 |     sorgente_path = Path(sorgente_path)
+277 |     if not sorgente_path.is_file(): raise FileNotFoundError(f"File non trovato: {sorgente_path}")
+    |                                   ^
+278 |
+279 |     estensione = sorgente_path.suffix.lower()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:299:39
+    |
+297 |         if row and elimina_file:
+298 |             file_assoluto = APP_DIR / row["percorso_file"]
+299 |             if file_assoluto.is_file(): file_assoluto.unlink()
+    |                                       ^
+300 |         conn.execute("DELETE FROM foto WHERE id = ?", (foto_id,))
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:309:36
+    |
+307 |                testo_libero: Optional[str] = None, ordine: str = "data_scatto DESC") -> list[dict]:
+308 |     ordini_ammessi = {"data_scatto DESC", "data_scatto ASC", "id DESC", "id ASC", "branca ASC", "fase ASC"}
+309 |     if ordine not in ordini_ammessi: ordine = "data_scatto DESC"
+    |                                    ^
+310 |
+311 |     clausole, params = [], []
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:313:45
+    |
+311 |     clausole, params = [], []
+312 |     if paziente_id is not None:
+313 |         clausole.append("f.paziente_id = ?"); params.append(paziente_id)
+    |                                             ^
+314 |     if dente:
+315 |         clausole.append("f.dente LIKE ? COLLATE NOCASE"); params.append(f"%{dente.strip()}%")
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:315:57
+    |
+313 |         clausole.append("f.paziente_id = ?"); params.append(paziente_id)
+314 |     if dente:
+315 |         clausole.append("f.dente LIKE ? COLLATE NOCASE"); params.append(f"%{dente.strip()}%")
+    |                                                         ^
+316 |     if branca:
+317 |         clausole.append("f.branca = ? COLLATE NOCASE"); params.append(branca.strip())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:317:55
+    |
+315 |         clausole.append("f.dente LIKE ? COLLATE NOCASE"); params.append(f"%{dente.strip()}%")
+316 |     if branca:
+317 |         clausole.append("f.branca = ? COLLATE NOCASE"); params.append(branca.strip())
+    |                                                       ^
+318 |     if fase:
+319 |         clausole.append("f.fase = ? COLLATE NOCASE"); params.append(fase.strip())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:319:53
+    |
+317 |         clausole.append("f.branca = ? COLLATE NOCASE"); params.append(branca.strip())
+318 |     if fase:
+319 |         clausole.append("f.fase = ? COLLATE NOCASE"); params.append(fase.strip())
+    |                                                     ^
+320 |     if data_da:
+321 |         clausole.append("f.data_scatto >= ?"); params.append(data_da.isoformat())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:321:46
+    |
+319 |         clausole.append("f.fase = ? COLLATE NOCASE"); params.append(fase.strip())
+320 |     if data_da:
+321 |         clausole.append("f.data_scatto >= ?"); params.append(data_da.isoformat())
+    |                                              ^
+322 |     if data_a:
+323 |         clausole.append("f.data_scatto <= ?"); params.append(data_a.isoformat())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:323:46
+    |
+321 |         clausole.append("f.data_scatto >= ?"); params.append(data_da.isoformat())
+322 |     if data_a:
+323 |         clausole.append("f.data_scatto <= ?"); params.append(data_a.isoformat())
+    |                                              ^
+324 |     if testo_libero:
+325 |         clausole.append("f.note LIKE ? COLLATE NOCASE"); params.append(f"%{testo_libero.strip()}%")
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:325:56
+    |
+323 |         clausole.append("f.data_scatto <= ?"); params.append(data_a.isoformat())
+324 |     if testo_libero:
+325 |         clausole.append("f.note LIKE ? COLLATE NOCASE"); params.append(f"%{testo_libero.strip()}%")
+    |                                                        ^
+326 |
+327 |     where_sql = ("WHERE " + " AND ".join(clausole)) if clausole else ""
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:362:13
+    |
+360 |     with get_connection() as conn:
+361 |         r = conn.execute("SELECT f.*, p.nome, p.cognome FROM foto f JOIN pazienti p ON p.id = f.paziente_id WHERE f.id = ?", (foto_id…
+362 |     if not r: return None
+    |             ^
+363 |     foto = dict(r)
+364 |     foto["nome"] = decrittografa(foto["nome"])
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:370:25
+    |
+368 | def aggiorna_tag_foto(foto_id: int, dente: Optional[str] = None, branca: Optional[str] = None, fase: Optional[str] = None, note: Opti…
+369 |     set_clausole, params = [], []
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+    |                         ^
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:370:59
+    |
+368 | def aggiorna_tag_foto(foto_id: int, dente: Optional[str] = None, branca: Optional[str] = None, fase: Optional[str] = None, note: Opti…
+369 |     set_clausole, params = [], []
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+    |                                                           ^
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:371:26
+    |
+369 |     set_clausole, params = [], []
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+    |                          ^
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:371:61
+    |
+369 |     set_clausole, params = [], []
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+    |                                                             ^
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:372:24
+    |
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+    |                        ^
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:372:57
+    |
+370 |     if dente is not None: set_clausole.append("dente = ?"); params.append(dente.strip())
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+    |                                                         ^
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:373:24
+    |
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |                        ^
+374 |
+375 |     if not set_clausole: return
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> database.py:373:57
+    |
+371 |     if branca is not None: set_clausole.append("branca = ?"); params.append(branca.strip())
+372 |     if fase is not None: set_clausole.append("fase = ?"); params.append(fase.strip())
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+    |                                                         ^
+374 |
+375 |     if not set_clausole: return
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:375:24
+    |
+373 |     if note is not None: set_clausole.append("note = ?"); params.append(note.strip())
+374 |
+375 |     if not set_clausole: return
+    |                        ^
+376 |     params.append(foto_id)
+377 |     with get_connection() as conn:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> database.py:400:16
+    |
+398 |     if backup_dir.exists():
+399 |         zips = sorted(backup_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime)
+400 |         if zips: ultimo_backup = zips[-1]
+    |                ^
+401 |
+402 |     return {
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:105:22
+    |
+103 |         """Converte coordinate dell'immagine (0.0-1.0) in Pixel effettivi sullo schermo."""
+104 |         params = self._projection_params()
+105 |         if not params: return 0.0, 0.0
+    |                      ^
+106 |         cx, cy, s, img_w, img_h = params
+107 |         px = cx + (norm_x * img_w - img_w / 2) * s
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:114:22
+    |
+112 |         """Converte la posizione del Mouse in coordinate immagine (0.0-1.0)."""
+113 |         params = self._projection_params()
+114 |         if not params: return 0.5, 0.5
+    |                      ^
+115 |         cx, cy, s, img_w, img_h = params
+116 |         norm_x = (px - cx) / s / img_w + 0.5
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:122:29
+    |
+120 |     def update_grid_render(self) -> None:
+121 |         """Ridisegna le linee sul canvas senza cancellare la fotografia."""
+122 |         if not self._visible: return
+    |                             ^
+123 |         
+124 |         params = self._projection_params()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:195:47
+    |
+194 |         # Ritorna l'ID se siamo entro la TOLLERANZA (in pixel)
+195 |         if abs(mx - px_gold) <= _HIT_TOLERANCE: return "gold" # priorità handle aureo
+    |                                               ^
+196 |         if abs(mx - px_med) <= _HIT_TOLERANCE:  return "med"
+197 |         if abs(my - py_bip) <= _HIT_TOLERANCE:  return "bip"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:196:46
+    |
+194 |         # Ritorna l'ID se siamo entro la TOLLERANZA (in pixel)
+195 |         if abs(mx - px_gold) <= _HIT_TOLERANCE: return "gold" # priorità handle aureo
+196 |         if abs(mx - px_med) <= _HIT_TOLERANCE:  return "med"
+    |                                              ^
+197 |         if abs(my - py_bip) <= _HIT_TOLERANCE:  return "bip"
+198 |         if abs(my - py_occ) <= _HIT_TOLERANCE:  return "occ"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:197:46
+    |
+195 |         if abs(mx - px_gold) <= _HIT_TOLERANCE: return "gold" # priorità handle aureo
+196 |         if abs(mx - px_med) <= _HIT_TOLERANCE:  return "med"
+197 |         if abs(my - py_bip) <= _HIT_TOLERANCE:  return "bip"
+    |                                              ^
+198 |         if abs(my - py_occ) <= _HIT_TOLERANCE:  return "occ"
+199 |         return ""
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:198:46
+    |
+196 |         if abs(mx - px_med) <= _HIT_TOLERANCE:  return "med"
+197 |         if abs(my - py_bip) <= _HIT_TOLERANCE:  return "bip"
+198 |         if abs(my - py_occ) <= _HIT_TOLERANCE:  return "occ"
+    |                                              ^
+199 |         return ""
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:209:29
+    |
+208 |     def _on_press(self, event: tk.Event) -> None:
+209 |         if not self._visible: return
+    |                             ^
+210 |         self._drag_target = self._hit_test(event.x, event.y)
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:213:33
+    |
+212 |     def _on_drag(self, event: tk.Event) -> str | None:
+213 |         if not self._drag_target: return
+    |                                 ^
+214 |         
+215 |         # Posizione del mouse in percentuale rispetto all'immagine
+    |
+
+E701 Multiple statements on one line (colon)
+   --> grid_overlay.py:239:29
+    |
+238 |     def _on_motion(self, event: tk.Event) -> None:
+239 |         if not self._visible: return
+    |                             ^
+240 |         hit = self._hit_test(event.x, event.y)
+    |
+
+F841 Local variable `file_originali` is assigned to but never used
+   --> thumbnail_cache.py:121:9
+    |
+119 |     eliminati = 0
+120 |     try:
+121 |         file_originali = {f.name for f in db.IMAGES_DIR.glob("*")
+    |         ^^^^^^^^^^^^^^
+122 |                          if f.is_file() and f.name != ".thumbs"}
+123 |         cutoff = time.time() - (7 * 86400)  # elimina solo thumbnail > 7 giorni
+    |
+help: Remove assignment to unused variable `file_originali`
+
+E701 Multiple statements on one line (colon)
+  --> ui_before_after.py:73:59
+   |
+71 |         my = cursor_y - ch / 2
+72 |         new_s = self._state.scale * factor
+73 |         if not (self.SCALE_MIN <= new_s <= self.SCALE_MAX): return
+   |                                                           ^
+74 |         self._state.offset_x = mx + (self._state.offset_x - mx) * factor
+75 |         self._state.offset_y = my + (self._state.offset_y - my) * factor
+   |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:103:29
+    |
+102 |     def _pan_move(self, event):
+103 |         if not self._panning: return
+    |                             ^
+104 |         dx = event.x - self._pan_last_x
+105 |         dy = event.y - self._pan_last_y
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:118:28
+    |
+117 |     def _on_wheel(self, event):
+118 |         if   event.num == 4:     delta = 1
+    |                            ^
+119 |         elif event.num == 5:     delta = -1
+120 |         else:                    delta = 1 if event.delta > 0 else -1
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:119:28
+    |
+117 |     def _on_wheel(self, event):
+118 |         if   event.num == 4:     delta = 1
+119 |         elif event.num == 5:     delta = -1
+    |                            ^
+120 |         else:                    delta = 1 if event.delta > 0 else -1
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:120:13
+    |
+118 |         if   event.num == 4:     delta = 1
+119 |         elif event.num == 5:     delta = -1
+120 |         else:                    delta = 1 if event.delta > 0 else -1
+    |             ^
+121 |
+122 |         factor = 1.13 if delta > 0 else 1 / 1.13
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:124:59
+    |
+122 |         factor = 1.13 if delta > 0 else 1 / 1.13
+123 |         new_s  = self._state.scale * factor
+124 |         if not (self.SCALE_MIN <= new_s <= self.SCALE_MAX): return
+    |                                                           ^
+125 |
+126 |         cw = self.winfo_width()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:151:28
+    |
+149 |         cw = self.winfo_width()
+150 |         ch = self.winfo_height()
+151 |         if cw < 2 or ch < 2: return
+    |                            ^
+152 |
+153 |         self.delete("all")
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:177:62
+    |
+175 |         crop_bottom = min(img_h, int(bottom))
+176 |
+177 |         if crop_right <= crop_left or crop_bottom <= crop_top: return
+    |                                                              ^
+178 |
+179 |         fragment = self._pil_img.crop((crop_left, crop_top, crop_right, crop_bottom))
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:200:32
+    |
+199 |     def _draw_watermark(self, cw: int, ch: int):
+200 |         if not self._label_text: return
+    |                                ^
+201 |         pad = 10; tw = 76; th = 22
+202 |         self.create_rectangle(pad, pad, pad + tw, pad + th, fill="#06101e", outline="", stipple="gray50")
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> ui_before_after.py:201:17
+    |
+199 |     def _draw_watermark(self, cw: int, ch: int):
+200 |         if not self._label_text: return
+201 |         pad = 10; tw = 76; th = 22
+    |                 ^
+202 |         self.create_rectangle(pad, pad, pad + tw, pad + th, fill="#06101e", outline="", stipple="gray50")
+203 |         self.create_text(pad + tw // 2, pad + th // 2, text=self._label_text, fill="#5090c0", font=("Segoe UI", 10, "bold"))
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> ui_before_after.py:201:26
+    |
+199 |     def _draw_watermark(self, cw: int, ch: int):
+200 |         if not self._label_text: return
+201 |         pad = 10; tw = 76; th = 22
+    |                          ^
+202 |         self.create_rectangle(pad, pad, pad + tw, pad + th, fill="#06101e", outline="", stipple="gray50")
+203 |         self.create_text(pad + tw // 2, pad + th // 2, text=self._label_text, fill="#5090c0", font=("Segoe UI", 10, "bold"))
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:230:12
+    |
+229 |     def _search(self, q: str):
+230 |         try: rows = db.cerca_pazienti(q)
+    |            ^
+231 |         except Exception: rows = []
+232 |         for w in self._scroll.winfo_children(): w.destroy()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:231:25
+    |
+229 |     def _search(self, q: str):
+230 |         try: rows = db.cerca_pazienti(q)
+231 |         except Exception: rows = []
+    |                         ^
+232 |         for w in self._scroll.winfo_children(): w.destroy()
+233 |         if not rows:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:232:47
+    |
+230 |         try: rows = db.cerca_pazienti(q)
+231 |         except Exception: rows = []
+232 |         for w in self._scroll.winfo_children(): w.destroy()
+    |                                               ^
+233 |         if not rows:
+234 |             ctk.CTkLabel(self._scroll, text="Nessun risultato.", text_color="#304060", font=ctk.CTkFont("Segoe UI", 12)).pack(pady=20)
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:271:12
+    |
+270 |     def _load(self):
+271 |         try: foto_list = db.cerca_foto(paziente_id=self._pid)
+    |            ^
+272 |         except Exception: foto_list = []
+273 |         self._refs.clear()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:272:25
+    |
+270 |     def _load(self):
+271 |         try: foto_list = db.cerca_foto(paziente_id=self._pid)
+272 |         except Exception: foto_list = []
+    |                         ^
+273 |         self._refs.clear()
+274 |         for w in self._scroll.winfo_children(): w.destroy()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:274:47
+    |
+272 |         except Exception: foto_list = []
+273 |         self._refs.clear()
+274 |         for w in self._scroll.winfo_children(): w.destroy()
+    |                                               ^
+275 |         if not foto_list:
+276 |             ctk.CTkLabel(self._scroll, text="Nessuna foto.", text_color="#304060", font=ctk.CTkFont("Segoe UI", 12)).pack(pady=24)
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:375:30
+    |
+374 |     def _open_foto_popup(self, slot: str):
+375 |         if not self._paziente: return
+    |                              ^
+376 |         _FotoPopup(self, paziente_id=self._paziente.get("id"), titolo="Seleziona foto BEFORE" if slot == "before" else "Seleziona fot…
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:380:28
+    |
+378 |     def _on_foto_selected(self, slot: str, foto: dict):
+379 |         path = db.get_percorso_assoluto(foto)
+380 |         if slot == "before": self._canvas_before.load_image(path)
+    |                            ^
+381 |         else: self._canvas_after.load_image(path)
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_before_after.py:381:13
+    |
+379 |         path = db.get_percorso_assoluto(foto)
+380 |         if slot == "before": self._canvas_before.load_image(path)
+381 |         else: self._canvas_after.load_image(path)
+    |             ^
+382 |
+383 |     def _on_sync_toggle(self):
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_email.py:304:15
+    |
+302 | …     ctk.CTkLabel(parent, text=lbl, font=FONT_MICRO, text_color=COLORI["grigio"]).grid(row=row, column=0, padx=16, pady=(0,2), stick…
+303 | …     e = ctk.CTkEntry(parent, font=FONT_NRM, height=32, fg_color=COLORI["entry_bg"], show=show)
+304 | …     if val: e.insert(0, val)
+    |             ^
+305 | …     e.grid(row=row+1, column=0, padx=16, pady=(0,6), sticky="ew")
+306 | …     return e
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_email.py:331:50
+    |
+329 |     def _ricarica_pazienti(self, *_):
+330 |         righe = db.cerca_pazienti(self._entry_cerca.get())
+331 |         for w in self._lista_paz.winfo_children(): w.destroy()
+    |                                                  ^
+332 |         for i, r in enumerate(righe):
+333 |             sel = (r["id"] == self._paz_id)
+    |
+
+F841 Local variable `corpo` is assigned to but never used
+   --> ui_email.py:369:9
+    |
+368 |         oggetto = self._e_ogg.get().strip()
+369 |         corpo   = self._txt_corpo.get("1.0", "end").strip()
+    |         ^^^^^
+370 |         cfg     = dict(self._cfg)
+371 |         paz_id  = self._paz_id
+    |
+help: Remove assignment to unused variable `corpo`
+
+E701 Multiple statements on one line (colon)
+   --> ui_email.py:383:39
+    |
+381 |                 if self._chk_foto.get():
+382 |                     foto_rows = db.cerca_foto(paziente_id=paz_id)[:5]
+383 |                     for r in foto_rows: allegati.append(db.get_percorso_assoluto(r))
+    |                                       ^
+384 |                 r = self._paz_row
+385 |                 corpo = self._txt_corpo.get("1.0", "end")
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_email.py:402:32
+    |
+400 |                 import shutil
+401 |                 tmp = db.APP_DIR / "_tmp_email"
+402 |                 if tmp.is_dir(): shutil.rmtree(tmp, ignore_errors=True)
+    |                                ^
+403 |
+404 |         threading.Thread(target=_job, daemon=True).start()
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_main_v3.py:973:55
+    |
+971 |     def _on_search(self, event=None):
+972 |         q = self._search_entry.get().strip()
+973 |         for w in self._results_scroll.winfo_children(): w.destroy()
+    |                                                       ^
+974 |         if not q: return
+975 |         try: rows = db.cerca_pazienti(q)
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_main_v3.py:974:17
+    |
+972 |         q = self._search_entry.get().strip()
+973 |         for w in self._results_scroll.winfo_children(): w.destroy()
+974 |         if not q: return
+    |                 ^
+975 |         try: rows = db.cerca_pazienti(q)
+976 |         except Exception: rows = []
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_main_v3.py:975:12
+    |
+973 |         for w in self._results_scroll.winfo_children(): w.destroy()
+974 |         if not q: return
+975 |         try: rows = db.cerca_pazienti(q)
+    |            ^
+976 |         except Exception: rows = []
+977 |         if not rows:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_main_v3.py:976:25
+    |
+974 | …     if not q: return
+975 | …     try: rows = db.cerca_pazienti(q)
+976 | …     except Exception: rows = []
+    |                       ^
+977 | …     if not rows:
+978 | …         ctk.CTkLabel(self._results_scroll, text="Nessun risultato.", text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 11)).gri…
+    |
+
+F841 Local variable `dn` is assigned to but never used
+   --> ui_main_v3.py:987:9
+    |
+985 |         nome = paz.get("nome", "")
+986 |         cogn = paz.get("cognome", "")
+987 |         dn   = paz.get("data_nascita", "")
+    |         ^^
+988 |         row = ctk.CTkFrame(self._results_scroll, fg_color="#111e38", corner_radius=6, height=38)
+989 |         row.grid(row=idx, column=0, sticky="ew", padx=2, pady=2)
+    |
+help: Remove assignment to unused variable `dn`
+
+E701 Multiple statements on one line (colon)
+    --> ui_main_v3.py:1011:55
+     |
+1009 |     def _reset_search(self):
+1010 |         self._search_entry.delete(0, "end")
+1011 |         for w in self._results_scroll.winfo_children(): w.destroy()
+     |                                                       ^
+1012 |
+1013 |     @staticmethod
+     |
+
+E701 Multiple statements on one line (colon)
+    --> ui_main_v3.py:1052:33
+     |
+1051 |     def _render_preview(self):
+1052 |         if self._pil_img is None: return
+     |                                 ^
+1053 |         cw = self._drop_canvas.winfo_width()
+1054 |         ch = self._drop_canvas.winfo_height()
+     |
+
+E701 Multiple statements on one line (colon)
+    --> ui_main_v3.py:1055:28
+     |
+1053 |         cw = self._drop_canvas.winfo_width()
+1054 |         ch = self._drop_canvas.winfo_height()
+1055 |         if cw < 4 or ch < 4: return
+     |                            ^
+1056 |         img_w, img_h = self._pil_img.size
+1057 |         scale = min(cw / img_w, ch / img_h)
+     |
+
+E701 Multiple statements on one line (colon)
+    --> ui_main_v3.py:1084:64
+     |
+1083 |     def _salva(self):
+1084 |         if self._paziente_id is None or self._file_path is None: return
+     |                                                                ^
+1085 |
+1086 |         dente  = self._tag_dente.get()
+     |
+
+E701 Multiple statements on one line (colon)
+   --> ui_modifica_tag.py:319:55
+    |
+318 |         # Precompila combo/note con valori attuali
+319 |         if r["dente"]  and r["dente"]  in db.DENTI_FDI: self._combo_dente.set(r["dente"])
+    |                                                       ^
+320 |         if r["branca"] and r["branca"] in db.BRANCHE:   self._combo_branca.set(r["branca"])
+321 |         if r["fase"]   and r["fase"]   in db.FASI:      self._combo_fase.set(r["fase"])
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_modifica_tag.py:320:53
+    |
+318 |         # Precompila combo/note con valori attuali
+319 |         if r["dente"]  and r["dente"]  in db.DENTI_FDI: self._combo_dente.set(r["dente"])
+320 |         if r["branca"] and r["branca"] in db.BRANCHE:   self._combo_branca.set(r["branca"])
+    |                                                     ^
+321 |         if r["fase"]   and r["fase"]   in db.FASI:      self._combo_fase.set(r["fase"])
+    |
+
+E701 Multiple statements on one line (colon)
+   --> ui_modifica_tag.py:321:50
+    |
+319 |         if r["dente"]  and r["dente"]  in db.DENTI_FDI: self._combo_dente.set(r["dente"])
+320 |         if r["branca"] and r["branca"] in db.BRANCHE:   self._combo_branca.set(r["branca"])
+321 |         if r["fase"]   and r["fase"]   in db.FASI:      self._combo_fase.set(r["fase"])
+    |                                                  ^
+322 |
+323 |         self._txt_note.delete("1.0", "end")
+    |
+
+E741 Ambiguous variable name: `l`
+   --> ui_scheda_paziente.py:370:25
+    |
+369 |     def get_value(self) -> str:
+370 |         attive = [l for l, v in self._vars.items() if v.get()]
+    |                         ^
+371 |         parti = []
+372 |         if attive:
+    |
+
+E702 Multiple statements on one line (semicolon)
+  --> ui_statistiche.py:44:16
+   |
+43 | class BarChart(tk.Canvas):
+44 |     PAD_L = 150; PAD_R = 56; PAD_T = 42; PAD_B = 16
+   |                ^
+45 |     BAR_H = 24;  BAR_GAP = 10
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> ui_statistiche.py:44:28
+   |
+43 | class BarChart(tk.Canvas):
+44 |     PAD_L = 150; PAD_R = 56; PAD_T = 42; PAD_B = 16
+   |                            ^
+45 |     BAR_H = 24;  BAR_GAP = 10
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> ui_statistiche.py:44:40
+   |
+43 | class BarChart(tk.Canvas):
+44 |     PAD_L = 150; PAD_R = 56; PAD_T = 42; PAD_B = 16
+   |                                        ^
+45 |     BAR_H = 24;  BAR_GAP = 10
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> ui_statistiche.py:45:15
+   |
+43 | class BarChart(tk.Canvas):
+44 |     PAD_L = 150; PAD_R = 56; PAD_T = 42; PAD_B = 16
+45 |     BAR_H = 24;  BAR_GAP = 10
+   |               ^
+46 |
+47 |     def __init__(self, master, data, title="", bar_colors=None, **kwargs):
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> ui_statistiche.py:54:26
+   |
+52 |         kwargs["height"] = h
+53 |         super().__init__(master, **kwargs)
+54 |         self._data = data; self._title = title
+   |                          ^
+55 |         self._colors = bar_colors or COLORI["bar_colors"]
+56 |         self.bind("<Configure>", lambda e: self._draw())
+   |
+
+Found 85 errors.
+No fixes available (3 hidden fixes can be enabled with the `--unsafe-fixes` option).

@@ -12,7 +12,6 @@ import threading
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
-from datetime import date
 from typing import Optional
 from tkinter import messagebox
 import customtkinter as ctk
@@ -367,7 +366,6 @@ class EmailFrame(ctk.CTkFrame):
         self._log_reset()
 
         oggetto = self._e_ogg.get().strip()
-        corpo   = self._txt_corpo.get("1.0", "end").strip()
         cfg     = dict(self._cfg)
         paz_id  = self._paz_id
 
@@ -383,6 +381,7 @@ class EmailFrame(ctk.CTkFrame):
                     foto_rows = db.cerca_foto(paziente_id=paz_id)[:5]
                     for r in foto_rows: allegati.append(db.get_percorso_assoluto(r))
                 r = self._paz_row
+                corpo = self._txt_corpo.get("1.0", "end")
                 if r:
                     try:
                         corpo = corpo.format(nome=r["nome"], cognome=r["cognome"])

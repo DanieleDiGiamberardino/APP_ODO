@@ -24,14 +24,13 @@ Il nome file di cache include dimensioni e mtime del file originale
 per invalidarsi automaticamente se il file cambia.
 """
 
-import os
 import hashlib
 import threading
 from pathlib import Path
 from typing import Optional, Callable
 from PIL import Image
 import customtkinter as ctk
-
+import time
 import database as db
 
 # Cartella cache
@@ -119,8 +118,6 @@ def pulisci_cache_orfana() -> int:
     """
     eliminati = 0
     try:
-        file_originali = {f.name for f in db.IMAGES_DIR.glob("*")
-                         if f.is_file() and f.name != ".thumbs"}
         cutoff = time.time() - (7 * 86400)  # elimina solo thumbnail > 7 giorni
         for thumb in THUMBS_DIR.glob("*.jpg"):
             if thumb.stat().st_mtime < cutoff:

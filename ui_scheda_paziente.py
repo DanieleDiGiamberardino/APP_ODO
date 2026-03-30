@@ -11,12 +11,10 @@ Tab:
   🖼️ Foto        → galleria filtrata
 """
 
-import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image
 from datetime import date
-from typing import Optional
 
 import database as db
 
@@ -369,7 +367,7 @@ class AnamnesIEditor(ctk.CTkFrame):
                        padx=10, pady=(0, 10), sticky="ew")
 
     def get_value(self) -> str:
-        attive = [l for l, v in self._vars.items() if v.get()]
+        attive = [k for k, v in self._vars.items() if v.get()]
         parti = []
         if attive:
             parti.append("✓ " + " | ".join(attive))

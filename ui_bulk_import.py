@@ -14,7 +14,6 @@ Funzionalità:
 Si integra in App come quinta voce di navigazione.
 """
 
-import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image

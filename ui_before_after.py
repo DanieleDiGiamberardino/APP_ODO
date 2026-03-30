@@ -3,6 +3,9 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 import database as db
 
+# --- NUOVO IMPORT GRIGLIA DSD ---
+from grid_overlay import GridOverlayManager
+
 class _ViewState:
     def __init__(self):
         self.scale: float = 1.0     
@@ -38,6 +41,9 @@ class _ImageCanvas(tk.Canvas):
         self._render_pending = False
 
         self._bind_events()
+        
+        # --- INIZIALIZZA LA GRIGLIA DSD ---
+        self._grid = GridOverlayManager(self)
 
     def load_image(self, path: str):
         try:
@@ -55,6 +61,7 @@ class _ImageCanvas(tk.Canvas):
 
     def reset_view(self):
         self._state.reset()
+        self._grid.reset() # Resetta anche le linee della griglia al centro
         self._schedule_render()
 
     def apply_delta_zoom(self, factor: float, cursor_x: float, cursor_y: float):
@@ -84,6 +91,10 @@ class _ImageCanvas(tk.Canvas):
         self.bind("<Configure>",       lambda e: self._schedule_render())
 
     def _pan_start(self, event):
+        # FIX GRIGLIA: Non spostare la foto se stiamo trascinando la linea della griglia!
+        if self._grid.visible and self._grid._hit_test(event.x, event.y) != "":
+            return
+
         self._panning = True
         self._pan_last_x = event.x
         self._pan_last_y = event.y
@@ -150,7 +161,6 @@ class _ImageCanvas(tk.Canvas):
         base = min(cw / img_w, ch / img_h)
         s = base * self._state.scale          
 
-        # MATEMATICA CORRETTA (Centrata)
         cx = cw / 2 + self._state.offset_x
         cy = ch / 2 + self._state.offset_y
 
@@ -178,6 +188,9 @@ class _ImageCanvas(tk.Canvas):
 
         self.create_image(draw_x, draw_y, image=self._tk_img, anchor="nw", tags="img")
         self._draw_watermark(cw, ch)  
+
+        # --- DISEGNA LA GRIGLIA DSD SOPRA LA FOTO ---
+        self._grid.update_grid_render()
 
     def _draw_placeholder(self, cw: int, ch: int):
         self.create_rectangle(0, 0, cw, ch, fill="#080c18", outline="")
@@ -269,7 +282,6 @@ class _FotoPopup(ctk.CTkToplevel):
             card = ctk.CTkFrame(self._scroll, fg_color="#111e38", corner_radius=8)
             card.grid(row=r, column=c, padx=6, pady=6, sticky="nsew")
 
-            # PERCORSO ASSOLUTO FIX
             path_assoluto = db.get_percorso_assoluto(foto)
             tk_thumb = self._make_thumb(path_assoluto)
             self._refs.append(tk_thumb)
@@ -293,6 +305,7 @@ class BeforeAfterFrame(ctk.CTkFrame):
         super().__init__(master, **kwargs)
         self._paziente: dict | None = None
         self._sync_var = tk.BooleanVar(value=False)
+        self._grid_var = tk.BooleanVar(value=False) # Variabile per la griglia
         self._build_toolbar()
         self._build_canvas_area()
         self._update_zoom_labels()
@@ -333,7 +346,7 @@ class BeforeAfterFrame(ctk.CTkFrame):
         bar = ctk.CTkFrame(parent, fg_color="#0a1020", corner_radius=0, height=44)
         bar.grid(row=1, column=0, columnspan=3, sticky="ew")
         bar.pack_propagate(False)
-        bar.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
+        bar.grid_columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
         _rb = dict(width=110, height=28, fg_color="#111e38", hover_color="#1a2a4a", text_color="#6080a0", font=ctk.CTkFont("Segoe UI", 11))
 
         ctk.CTkButton(bar, text="↺  Reset Before", command=self._canvas_before.reset_view, **_rb).grid(row=0, column=0, padx=12, pady=8, sticky="w")
@@ -341,10 +354,13 @@ class BeforeAfterFrame(ctk.CTkFrame):
         self._lbl_zoom_b.grid(row=0, column=1)
 
         ctk.CTkCheckBox(bar, text="🔒  Sincronizza Viste", variable=self._sync_var, onvalue=True, offvalue=False, fg_color="#0f3460", hover_color="#1a4a80", checkmark_color="white", text_color="#80b0d8", font=ctk.CTkFont("Segoe UI", 12, "bold"), command=self._on_sync_toggle).grid(row=0, column=2)
+        
+        # --- PULSANTE GRIGLIA ---
+        ctk.CTkCheckBox(bar, text="📐  Griglia DSD", variable=self._grid_var, onvalue=True, offvalue=False, fg_color="#0f3460", hover_color="#1a4a80", checkmark_color="white", text_color="#ffd600", font=ctk.CTkFont("Segoe UI", 12, "bold"), command=self._on_grid_toggle).grid(row=0, column=3)
 
         self._lbl_zoom_a = ctk.CTkLabel(bar, text="100%", text_color="#304060", font=ctk.CTkFont("Segoe UI", 10, "bold"))
-        self._lbl_zoom_a.grid(row=0, column=3)
-        ctk.CTkButton(bar, text="↺  Reset After", command=self._canvas_after.reset_view, **_rb).grid(row=0, column=4, padx=12, pady=8, sticky="e")
+        self._lbl_zoom_a.grid(row=0, column=4)
+        ctk.CTkButton(bar, text="↺  Reset After", command=self._canvas_after.reset_view, **_rb).grid(row=0, column=5, padx=12, pady=8, sticky="e")
 
     def _open_paziente_popup(self):
         _PazientePopup(self, on_select=self._on_paziente_selected)
@@ -360,7 +376,6 @@ class BeforeAfterFrame(ctk.CTkFrame):
         _FotoPopup(self, paziente_id=self._paziente.get("id"), titolo="Seleziona foto BEFORE" if slot == "before" else "Seleziona foto AFTER", on_select=lambda f: self._on_foto_selected(slot, f))
 
     def _on_foto_selected(self, slot: str, foto: dict):
-        # PERCORSO ASSOLUTO FIX
         path = db.get_percorso_assoluto(foto)
         if slot == "before": self._canvas_before.load_image(path)
         else: self._canvas_after.load_image(path)
@@ -369,6 +384,22 @@ class BeforeAfterFrame(ctk.CTkFrame):
         enabled = self._sync_var.get()
         self._canvas_before.set_sync(enabled)
         self._canvas_after.set_sync(enabled)
+        
+    def _on_grid_toggle(self):
+        # Leggiamo il valore ESATTO della spunta (True se accesa, False se spenta)
+        enabled = self._grid_var.get()
+        
+        # Sincronizziamo forzatamente la griglia di Sinistra (Before)
+        if self._canvas_before._grid.visible != enabled:
+            self._canvas_before._grid.toggle_grid()
+            
+        # Sincronizziamo forzatamente la griglia di Destra (After)
+        if self._canvas_after._grid.visible != enabled:
+            self._canvas_after._grid.toggle_grid()
+            
+        # Forza un refresh grafico
+        self._canvas_before._schedule_render()
+        self._canvas_after._schedule_render()
 
     def _update_zoom_labels(self):
         self._lbl_zoom_b.configure(text=f"{int(self._canvas_before._state.scale * 100)}%")

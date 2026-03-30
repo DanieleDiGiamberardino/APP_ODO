@@ -21,8 +21,6 @@ Layout:
 Apertura da sidebar o da callback _on_modifica_tag(foto_id).
 """
 
-import tkinter as tk
-from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image
 from pathlib import Path

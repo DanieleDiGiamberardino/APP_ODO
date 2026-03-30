@@ -21,7 +21,6 @@ Uso:
 """
 
 import hashlib
-import os
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
@@ -170,7 +169,7 @@ def init_auth_db() -> None:
     try:
         with db.get_connection() as conn:
             conn.execute("ALTER TABLE utenti ADD COLUMN richiede_cambio INTEGER NOT NULL DEFAULT 0")
-    except:
+    except Exception:
         pass
 
     # --- ADMIN DI DEFAULT ---

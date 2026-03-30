@@ -11,7 +11,6 @@ Schermata di login ridisegnata con layout split-panel.
 import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
-from datetime import datetime
 from typing import Optional
 import threading
 

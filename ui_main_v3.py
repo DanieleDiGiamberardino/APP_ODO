@@ -19,16 +19,15 @@ Navigazione sidebar:
 Pulsante rapido "💾 Backup" in fondo alla sidebar.
 """
 import sys
-import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from watchdog_monitor import CameraWatchdog
 import customtkinter as ctk
-from PIL import Image
-from datetime import date
+from PIL import Image, ImageTk, ImageOps
 import threading
-import time
 from pathlib import Path
 from typing import Optional
+from theme import MODERN_THEME, FONT_TITLE, FONT_BODY, _SidebarMixin
 
 # Drag & Drop — opzionale (richiede: pip install tkinterdnd2)
 try:
@@ -38,9 +37,9 @@ except ImportError:
     _DND_OK = False
 
 import database as db
-from auth import SessioneUtente, init_auth_db, PERMESSI
+from auth import SessioneUtente, init_auth_db
 from ui_login import LockScreen, GestioneUtentiFrame
-from thumbnail_cache import get_thumbnail, GalleryLoader
+from thumbnail_cache import GalleryLoader
 from export_pdf import genera_dossier_pdf
 from ui_statistiche import StatisticheFrame
 from ui_modifica_tag import ModificaTagFrame
@@ -986,7 +985,6 @@ class UploadFrame(ctk.CTkFrame):
         pid  = paz.get("id", "—")
         nome = paz.get("nome", "")
         cogn = paz.get("cognome", "")
-        dn   = paz.get("data_nascita", "")
         row = ctk.CTkFrame(self._results_scroll, fg_color="#111e38", corner_radius=6, height=38)
         row.grid(row=idx, column=0, sticky="ew", padx=2, pady=2)
         row.grid_propagate(False)
@@ -1454,7 +1452,6 @@ class DashboardFrame(ctk.CTkFrame):
             self._card(idx // self.COLS, idx % self.COLS, r, idx)
 
         # Poi carica le miniature in background
-        from thumbnail_cache import GalleryLoader
         self._loader = GalleryLoader(
             self._galleria,
             self._risultati,
@@ -1530,7 +1527,12 @@ class DashboardFrame(ctk.CTkFrame):
 # APPLICAZIONE PRINCIPALE
 # ===========================================================================
 
-# Aggiungi questo blocco:
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  APPLICAZIONE PRINCIPALE
+# ══════════════════════════════════════════════════════════════════════════════
+
 if _DND_OK:
     class DnDCTk(ctk.CTk, TkinterDnD.DnDWrapper):
         def __init__(self, *args, **kwargs):
@@ -1539,433 +1541,288 @@ if _DND_OK:
 else:
     DnDCTk = ctk.CTk
 
-class App(DnDCTk):
-    VOCI_NAV = [
-        ("📋  Dashboard",    "dashboard"),
-        ("👤  Pazienti",     "pazienti"),
-        ("⬆️  Upload Foto",  "upload"),
-        ("📦  Import Massivo","import"),
-        ("📊  Statistiche",  "statistiche"),
-        ("✏️  Modifica Tag",  "modifica_tag"),
-        ("💾  Backup",       "backup"),
-        ("📹  Webcam",       "webcam"),
-        ("🔄  Before/After", "before_after"),
-        ("📧  Email",        "email"),
-        ("📅  Timeline",     "timeline"),
-        ("👥  Utenti",       "utenti"),     # solo admin
-    ]
+
+class App(DnDCTk, _SidebarMixin):
+    """
+    Applicazione principale.
+    Eredita da _SidebarMixin per la sidebar moderna (MODERN_THEME).
+    Layout principale usa pack (coerente con sidebar mixin).
+    """
+
+    _TITOLI: dict[str, str] = {
+        "dashboard":    "📋  Dashboard & Ricerca",
+        "pazienti":     "👤  Gestione Pazienti",
+        "upload":       "⬆️  Upload Fotografia",
+        "import":       "📦  Import Massivo",
+        "statistiche":  "📊  Statistiche Cliniche",
+        "modifica_tag": "✏️  Modifica Tag Fotografie",
+        "backup":       "💾  Backup & Ripristino",
+        "webcam":       "📹  Acquisizione Webcam",
+        "utenti":       "👥  Gestione Utenti",
+        "before_after": "🔄  Confronto Before / After",
+        "email":        "📧  Invio Email Dossier",
+        "timeline":     "📅  Timeline Paziente",
+        "impostazioni": "⚙  Impostazioni",
+        "info":         "ℹ  Informazioni",
+    }
 
     def __init__(self):
         super().__init__()
-        self.title("DentalPhoto — Gestione Fotografie Cliniche")
-        self.geometry("1280x800")
-        # --- IMPOSTAZIONE ICONA FINESTRA (Runtime) ---
+        T = MODERN_THEME
+
+        # ── aspetto finestra ──────────────────────────────────────────────────
+        self.configure(fg_color=T["bg_root"])
+        self.title("DentalPhoto Pro — Gestione Clinica")
+        self.geometry("1380x840")
+        self.minsize(1060, 640)
+
         icon_path = Path(__file__).parent / "Icon_APP.png"
         if icon_path.exists():
             try:
-                from PIL import Image, ImageTk
-                pil_img = Image.open(icon_path)
-                tk_icon = ImageTk.PhotoImage(pil_img)
-                self.wm_iconphoto(False, tk_icon)
-                self._icon_reference = tk_icon
-                print("Icona caricata.")
-            except Exception as e:
-                print(f"Errore icona: {e}")
-        self.minsize(960, 600)
-        self._pagina = ""
-        self._frames: dict = {}
-        self._paz_upload: Optional[int] = None
-        self._foto_mod: Optional[int] = None
-        self._lock_aperto = False
-        self._build_layout()
+                _ico = ImageTk.PhotoImage(Image.open(icon_path))
+                self.wm_iconphoto(False, _ico)
+                self._icon_ref = _ico          # GC anchor
+            except Exception:
+                pass
+
+        # ── stato interno ─────────────────────────────────────────────────────
+        self._active_page: str             = ""
+        self._frames:      dict            = {}
+        self._paz_upload:  int | None      = None
+        self._foto_mod:    int | None      = None
+        self._lock_aperto: bool            = False
+        self._watchdog:    CameraWatchdog | None = None
+        self._backup_in_corso: bool        = False
+
+        # ── layout (pack — coerente con il sidebar mixin) ─────────────────────
+        #   sidebar (pack left)  |  separatore (pack left)  |  main column (pack fill)
+        self._build_sidebar()          # ← da _SidebarMixin, pack(side="left")
+        self._build_main_column()      # ← pack(side="left", fill="both", expand=True)
+
+        # ── servizi ───────────────────────────────────────────────────────────
         ToastManager.init(self)
         self._registra_hotkey()
-        self._naviga("dashboard")
         self._avvia_timer_lock()
         self._avvia_refresh_statusbar()
-        # Propaga l'attività a SessioneUtente ad ogni interazione
         self.bind_all("<Motion>",   lambda e: SessioneUtente.registra_attivita())
         self.bind_all("<KeyPress>", lambda e: SessioneUtente.registra_attivita())
 
-    # ------------------------------------------------------------------
+        # ── navigazione iniziale ──────────────────────────────────────────────
+        self._navigate("dashboard")
 
-    def _build_layout(self):
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)   # status bar — altezza fissa
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Layout principale
+    # ══════════════════════════════════════════════════════════════════════════
 
-        sb = ctk.CTkFrame(self, width=228, corner_radius=0,
-                          fg_color=COLORI["sidebar_bg"])
-        sb.grid(row=0, column=0, sticky="nsew")
-        sb.grid_propagate(False)
-        sb.grid_columnconfigure(0, weight=1)
-        sb.grid_rowconfigure(15, weight=1)  # riga vuota di spaziatura tra nav e bottom bar
+    def _build_main_column(self):
+        """Colonna destra: header + area contenuto + statusbar."""
+        T = MODERN_THEME
+        col = tk.Frame(self, bg=T["bg_root"])
+        col.pack(side="left", fill="both", expand=True)
 
-        # ── Logo ──
-        lf = ctk.CTkFrame(sb, fg_color="transparent")
-        lf.grid(row=0, column=0, padx=16, pady=(20, 6), sticky="ew")
-        ctk.CTkLabel(lf, text="🦷", font=("Segoe UI", 30)).pack()
-        ctk.CTkLabel(lf, text="DentalPhoto",
-                     font=("Segoe UI", 15, "bold"),
-                     text_color=COLORI["testo_chiaro"]).pack()
+        self._build_header_bar(col)
+        self._build_statusbar_modern(col)   # pack bottom prima di content
+        self._build_content_area(col)       # fill="both", expand=True
 
-        # Badge utente loggato
-        self._lbl_utente_badge = ctk.CTkLabel(
-            sb,
-            text=f"👤  {SessioneUtente.nome_display()}",
-            font=("Segoe UI", 9),
-            fg_color=COLORI["nav_active"],
-            corner_radius=8,
-            text_color=COLORI["testo_grigio"],
-            padx=8, pady=4,
-        )
-        self._lbl_utente_badge.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="ew")
+    def _build_header_bar(self, parent):
+        """Barra superiore con titolo pagina, watchdog e shortcut hints."""
+        T = MODERN_THEME
+        bar = tk.Frame(parent, bg=T["bg_sidebar"], height=52)
+        bar.pack(side="top", fill="x")
+        bar.pack_propagate(False)
 
-        # Pulsante ricerca globale Ctrl+K
-        ctk.CTkButton(
-            sb,
-            text="🔍  Cerca…       Ctrl+K",
-            font=("Segoe UI", 9),
-            height=26,
-            fg_color=COLORI["sfondo_entry"],
-            hover_color=COLORI["nav_active"],
-            border_width=1,
-            border_color=COLORI["sidebar_border"],
-            corner_radius=6,
-            text_color=COLORI["testo_grigio"],
+        # separatore orizzontale inferiore
+        tk.Frame(parent, bg=T["border"], height=1).pack(side="top", fill="x")
+
+        # ── titolo pagina corrente ────────────────────────────────────────────
+        self._lbl_titolo = tk.Label(
+            bar,
+            text="",
+            bg=T["bg_sidebar"],
+            fg=T["text_primary"],
+            font=("Segoe UI", 14, "bold"),
             anchor="w",
-            command=self._apri_spotlight,
-        ).grid(row=2, column=0, padx=12, pady=(0, 4), sticky="ew")
+        )
+        self._lbl_titolo.pack(side="left", padx=20, fill="y")
 
-        ctk.CTkFrame(sb, height=1, fg_color=COLORI["sidebar_border"]).grid(
-            row=3, column=0, padx=14, pady=(0, 6), sticky="ew")
+        # ── bottone Auto-Import Reflex ────────────────────────────────────────
+        self._btn_watchdog = ctk.CTkButton(
+            bar,
+            text="📷  Auto-Import",
+            width=148,
+            height=32,
+            fg_color=T["bg_panel"],
+            hover_color=T["bg_panel_alt"],
+            text_color=T["text_secondary"],
+            border_color=T["border"],
+            border_width=1,
+            font=ctk.CTkFont("Segoe UI", 11),
+            corner_radius=7,
+            command=self._toggle_watchdog,
+        )
+        self._btn_watchdog.pack(side="right", padx=(6, 16), pady=10)
 
-        self._nav_btns: dict = {}
-        for i, (lbl, key) in enumerate(self.VOCI_NAV, start=4):
-            # Nascondi "Utenti" ai non-admin
-            if key == "utenti" and not SessioneUtente.is_admin():
-                continue
-            b = ctk.CTkButton(sb, text=lbl, font=FONT_NORMALE, height=40, anchor="w",
-                              fg_color="transparent", hover_color=COLORI["sidebar_hover"],
-                              corner_radius=8, border_spacing=10,
-                              command=lambda k=key: self._naviga(k))
-            b.grid(row=i, column=0, padx=8, pady=2, sticky="ew")
-            self._nav_btns[key] = b
+        # ── hint shortcut ─────────────────────────────────────────────────────
+        tk.Label(
+            bar,
+            text="Ctrl+K  Ricerca globale   ·   F5  Aggiorna   ·   Ctrl+B  Backup",
+            bg=T["bg_sidebar"],
+            fg=T["text_disabled"],
+            font=("Segoe UI", 8),
+        ).pack(side="right", padx=(0, 12), fill="y")
 
-        # Bottom bar
-        ctk.CTkFrame(sb, height=1, fg_color=COLORI["sidebar_border"]).grid(
-            row=16, column=0, padx=14, pady=(0, 6), sticky="ew")
+    def _build_content_area(self, parent):
+        """Frame contenitore delle pagine (lazy-loaded)."""
+        T = MODERN_THEME
+        wrapper = tk.Frame(parent, bg=T["bg_root"])
+        wrapper.pack(side="top", fill="both", expand=True,
+                     padx=18, pady=(14, 0))
+        wrapper.grid_columnconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(0, weight=1)
 
-        # Riga bottoni bottom
-        bot = ctk.CTkFrame(sb, fg_color="transparent")
-        bot.grid(row=17, column=0, padx=8, pady=(0, 4), sticky="ew")
-        bot.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkButton(
-            bot, text="⚡ Backup",
-            font=("Segoe UI", 9, "bold"), height=28,
-            fg_color=COLORI["backup_btn"], hover_color="#a33800",
-            command=self._backup_rapido,
-        ).grid(row=0, column=0, padx=(0, 3), sticky="ew")
-
-        ctk.CTkButton(
-            bot, text="🔒",
-            font=("Segoe UI", 12), height=28, width=34,
-            fg_color=COLORI["lock_btn"], hover_color="#0f2a4a",
-            command=self._blocca_sessione,
-        ).grid(row=0, column=1)
-
-        ctk.CTkButton(
-            bot, text="⏻ Logout",
-            font=("Segoe UI", 9), height=28,
-            fg_color="transparent", border_width=1,
-            border_color=COLORI["sidebar_border"],
-            text_color=COLORI["testo_grigio"],
-            hover_color=COLORI["sidebar_hover"],
-            command=self._logout,
-        ).grid(row=1, column=0, columnspan=2, pady=(3, 0), sticky="ew")
-
-        ctk.CTkLabel(sb, text="Tema", font=("Segoe UI", 9),
-                     text_color=COLORI["testo_grigio"]).grid(
-            row=18, column=0, padx=14, pady=(6, 2), sticky="w")
-        ctk.CTkOptionMenu(sb, values=["Dark", "Light", "System"],
-                          font=("Segoe UI", 9), height=26,
-                          command=lambda t: ctk.set_appearance_mode(t.lower())).grid(
-            row=19, column=0, padx=8, pady=(0, 14), sticky="ew")
-
-        # Content area
-        self._content = ctk.CTkFrame(self, fg_color="transparent")
-        self._content.grid(row=0, column=1, padx=16, pady=16, sticky="nsew")
-        self._content.grid_columnconfigure(0, weight=1)
-        self._content.grid_rowconfigure(1, weight=1)
-
-        self._lbl_titolo = ctk.CTkLabel(self._content, text="", font=FONT_TITOLO)
-        self._lbl_titolo.grid(row=0, column=0, pady=(0, 12), sticky="w")
-
-        self._fc = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._fc.grid(row=1, column=0, sticky="nsew")
+        self._fc = ctk.CTkFrame(wrapper, fg_color="transparent", corner_radius=0)
+        self._fc.grid(row=0, column=0, sticky="nsew")
         self._fc.grid_columnconfigure(0, weight=1)
         self._fc.grid_rowconfigure(0, weight=1)
 
-        # ── Status bar ───────────────────────────────────────────────
-        sb_bar = ctk.CTkFrame(self, height=28, corner_radius=0,
-                              fg_color=COLORI["sidebar_bg"],
-                              border_width=1,
-                              border_color=COLORI["sidebar_border"])
-        sb_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
-        sb_bar.grid_propagate(False)
-        sb_bar.grid_columnconfigure(1, weight=1)
+    def _build_statusbar_modern(self, parent):
+        """Status bar inferiore con utente, statistiche DB e ultimo backup."""
+        T = MODERN_THEME
+        # separatore superiore
+        tk.Frame(parent, bg=T["separator"], height=1).pack(side="bottom", fill="x")
 
-        # Sezione sinistra: utente
-        self._sb_utente = ctk.CTkLabel(
-            sb_bar, text="", font=("Segoe UI", 9),
-            text_color=COLORI["testo_grigio"])
-        self._sb_utente.grid(row=0, column=0, padx=(12, 0), sticky="w")
+        sb = tk.Frame(parent, bg=T["bg_sidebar"], height=28)
+        sb.pack(side="bottom", fill="x")
+        sb.pack_propagate(False)
 
-        # Separatore
-        ctk.CTkFrame(sb_bar, width=1, height=16,
-                     fg_color=COLORI["sidebar_border"]).grid(
-            row=0, column=1, padx=8, sticky="")
-
-        # Sezione centrale: statistiche
-        self._sb_stats = ctk.CTkLabel(
-            sb_bar, text="", font=("Segoe UI", 9),
-            text_color=COLORI["testo_grigio"])
-        self._sb_stats.grid(row=0, column=1, padx=0, sticky="w")
-
-        # Sezione destra: db size + backup
-        self._sb_backup = ctk.CTkLabel(
-            sb_bar, text="", font=("Segoe UI", 9),
-            text_color=COLORI["testo_grigio"])
-        self._sb_backup.grid(row=0, column=2, padx=(0, 12), sticky="e")
-
-    # ------------------------------------------------------------------
-
-    def toast(self, messaggio: str, tipo: str = "info", durata_ms: int = 3500):
-        """Scorciatoia per mostrare una notifica toast."""
-        ToastManager.mostra(messaggio, tipo, durata_ms)
-
-    # ------------------------------------------------------------------
-    # Hotkey globali
-    # ------------------------------------------------------------------
-
-    def _registra_hotkey(self):
-        """
-        Registra le scorciatoie da tastiera globali dell'applicazione.
-
-        Ctrl+1…9  → naviga alla voce N della sidebar
-        Ctrl+N    → nuovo paziente (apre sezione Pazienti)
-        Ctrl+F    → focus sulla ricerca (Dashboard)
-        F5        → aggiorna la pagina corrente
-        Ctrl+B    → backup rapido
-        """
-        VOCI = [v[1] for v in self.VOCI_NAV]   # lista chiavi in ordine
-
-        for i, chiave in enumerate(VOCI[:9], start=1):
-            self.bind_all(
-                f"<Control-Key-{i}>",
-                lambda e, k=chiave: self._naviga(k),
-                add="+",
-            )
-
-        self.bind_all("<Control-n>",
-                      lambda e: self._naviga("pazienti"), add="+")
-        self.bind_all("<Control-N>",
-                      lambda e: self._naviga("pazienti"), add="+")
-        self.bind_all("<Control-b>",
-                      lambda e: self._backup_rapido(), add="+")
-        self.bind_all("<Control-B>",
-                      lambda e: self._backup_rapido(), add="+")
-        self.bind_all("<F5>",
-                      lambda e: self._refresh_pagina(), add="+")
-        self.bind_all("<Control-f>",
-                      lambda e: self._focus_ricerca(), add="+")
-        self.bind_all("<Control-F>",
-                      lambda e: self._focus_ricerca(), add="+")
-        self.bind_all("<Control-k>",
-                      lambda e: self._apri_spotlight(), add="+")
-        self.bind_all("<Control-K>",
-                      lambda e: self._apri_spotlight(), add="+")
-
-    def _refresh_pagina(self):
-        """F5 — aggiorna la sezione corrente."""
-        pag = self._pagina
-        if pag == "dashboard" and "dashboard" in self._frames:
-            self._frames["dashboard"].esegui_ricerca()
-            self._frames["dashboard"]._aggiorna_kpi()
-        elif pag == "pazienti" and "pazienti" in self._frames:
-            self._frames["pazienti"].aggiorna_lista()
-        elif pag == "statistiche" and "statistiche" in self._frames:
-            self._frames["statistiche"].aggiorna_tutto()
-        self._aggiorna_statusbar()
-        self.toast("Pagina aggiornata", "info", 1800)
-
-    def _focus_ricerca(self):
-        """Ctrl+F — porta il focus sulla ricerca della Dashboard."""
-        self._naviga("dashboard")
-        try:
-            self._frames["dashboard"]._fp.focus_set()
-        except Exception:
-            pass
-
-    def _apri_spotlight(self):
-        """Ctrl+K — apre il popup di ricerca globale."""
-        SpotlightSearch(
-            self,
-            on_apri_paziente=self._spotlight_apri_paziente,
-            on_apri_foto=self._spotlight_apri_foto,
+        self._sb_utente = tk.Label(
+            sb, text="", bg=T["bg_sidebar"],
+            fg=T["text_secondary"], font=("Segoe UI", 9), anchor="w",
         )
+        self._sb_utente.pack(side="left", padx=(14, 0), fill="y")
 
-    def _spotlight_apri_paziente(self, pid: int):
-        """Callback spotlight: naviga a Upload con il paziente preselezionato."""
-        self._goto_upload(pid)
-        self.toast(f"Paziente caricato", "info", 2000)
+        self._sb_backup = tk.Label(
+            sb, text="", bg=T["bg_sidebar"],
+            fg=T["text_secondary"], font=("Segoe UI", 9), anchor="e",
+        )
+        self._sb_backup.pack(side="right", padx=(0, 14), fill="y")
 
-    def _spotlight_apri_foto(self, foto_id: int, foto_data):
-        """Callback spotlight: apre il DettaglioFoto."""
-        try:
-            percorso = db.get_percorso_assoluto(foto_data)
-            DettaglioFoto(self, percorso, foto_data,
-                          on_modifica_tag=self._goto_modifica,
-                          tutti_risultati=[foto_data], indice=0)
-        except Exception as e:
-            self.toast(f"Errore apertura foto: {e}", "error")
+        self._sb_stats = tk.Label(
+            sb, text="", bg=T["bg_sidebar"],
+            fg=T["text_disabled"], font=("Segoe UI", 9), anchor="center",
+        )
+        self._sb_stats.pack(side="left", fill="both", expand=True)
 
-    # ------------------------------------------------------------------
-    # Status bar
-    # ------------------------------------------------------------------
+    # ══════════════════════════════════════════════════════════════════════════
+    #  _SidebarMixin bridge
+    # ══════════════════════════════════════════════════════════════════════════
 
-    def _avvia_refresh_statusbar(self):
-        """Primo aggiornamento immediato + timer ogni 60s."""
-        self._aggiorna_statusbar()
-        self.after(60_000, self._avvia_refresh_statusbar)
+    def _show_page(self, key: str):
+        """
+        Chiamato da _SidebarMixin._navigate() dopo aver aggiornato i bottoni.
+        Si occupa di: switcher frame, titolo, aggiornamenti contestuali.
+        """
+        T = MODERN_THEME
+        self._lbl_titolo.configure(text=self._TITOLI.get(key, ""))
 
-    def _aggiorna_statusbar(self):
-        """Aggiorna i label della status bar con i dati aggiornati dal DB."""
-        def _fetch():
-            try:
-                stats = db.kpi_stats()
-                utente = SessioneUtente.nome_display() if SessioneUtente.corrente else "—"
-                self.after(0, lambda: self._applica_statusbar(stats, utente))
-            except Exception:
-                pass
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def _applica_statusbar(self, stats: dict, utente: str):
-        try:
-            self._sb_utente.configure(
-                text=f"👤  {utente}"
-            )
-            self._sb_stats.configure(
-                text=(f"Pazienti: {stats['pazienti']}   "
-                      f"Foto: {stats['foto_totali']}   "
-                      f"Oggi: {stats['foto_oggi']}   "
-                      f"DB: {stats['db_size_mb']} MB")
-            )
-            bk = stats.get("ultimo_backup")
-            if bk:
-                import datetime
-                mtime = datetime.datetime.fromtimestamp(bk.stat().st_mtime)
-                bk_txt = f"💾  Backup: {mtime.strftime('%d/%m/%Y %H:%M')}"
-            else:
-                bk_txt = "💾  Nessun backup"
-            self._sb_backup.configure(text=bk_txt)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-
-    def _naviga(self, key: str):
-        if key == self._pagina:
-            return
-        # Controllo permessi: operatori non possono accedere a backup/utenti
-        if SessioneUtente.corrente and not SessioneUtente.ha_permesso(key):
-            self.toast("Accesso negato: ruolo insufficiente", "error")
-            return
-        self._pagina = key
-        for k, b in self._nav_btns.items():
-            if k == key:
-                b.configure(fg_color=COLORI["nav_active"],
-                            text_color=COLORI["testo_chiaro"],
-                            border_width=0)
-            else:
-                b.configure(fg_color="transparent",
-                            text_color=COLORI["testo_grigio"],
-                            border_width=0)
-
-        titoli = {
-            "dashboard":   "📋  Dashboard & Ricerca",
-            "pazienti":    "👤  Gestione Pazienti",
-            "upload":      "⬆️  Upload Fotografia",
-            "import":      "📦  Import Massivo",
-            "statistiche": "📊  Statistiche Cliniche",
-            "modifica_tag": "✏️  Modifica Tag Fotografie",
-            "backup":      "💾  Backup & Ripristino",
-            "webcam":      "📹  Acquisizione Webcam",
-            "utenti":      "👥  Gestione Utenti",
-            "before_after": "🔄  Confronto Before/After",
-            "email":        "📧  Invio Email Dossier",
-            "timeline":    "📅  Timeline Paziente",
-        }
-        self._lbl_titolo.configure(text=titoli.get(key, ""))
-
+        # crea il frame se non esiste ancora (lazy init)
         if key not in self._frames:
-            self._frames[key] = self._build_frame(key)
+            try:
+                self._frames[key] = self._build_frame(key)
+            except ValueError:
+                return
 
+        # nasconde tutti, mostra il richiesto
         for f in self._frames.values():
             f.grid_remove()
         self._frames[key].grid(row=0, column=0, sticky="nsew")
 
-        # Aggiornamenti contestuali
+        # aggiornamenti contestuali
         if key == "pazienti":
             self._frames["pazienti"].aggiorna_lista()
         elif key == "dashboard":
             self._frames["dashboard"].esegui_ricerca()
         elif key == "statistiche":
             self._frames["statistiche"].aggiorna_tutto()
-        elif key == "modifica_tag":
-            if self._foto_mod is not None:
-                self._frames["modifica_tag"].preimposta_id(self._foto_mod)
-                self._foto_mod = None
-        elif key == "upload" and self._paz_upload:
+        elif key == "modifica_tag" and self._foto_mod is not None:
+            self._frames["modifica_tag"].preimposta_id(self._foto_mod)
+            self._foto_mod = None
+        elif key == "webcam":
+            self._frames["webcam"].attiva()
+        elif key == "upload" and self._paz_upload is not None:
             self._frames["upload"].imposta_paziente(self._paz_upload)
             self._paz_upload = None
+
         self._aggiorna_statusbar()
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  _naviga  –  entry point pubblico (con pre-checks)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _naviga(self, key: str):
+        """
+        Entry point per la navigazione con:
+          - Controllo permessi
+          - Disattivazione webcam se si lascia quella pagina
+        Poi delega a _navigate (mixin) che aggiorna sidebar e chiama _show_page.
+        """
+        # controllo permessi
+        if SessioneUtente.corrente and not SessioneUtente.ha_permesso(key):
+            self.toast("Accesso negato: ruolo insufficiente.", "error")
+            return
+
+        # spegni la webcam se stiamo navigando via
+        if self._active_page == "webcam" and "webcam" in self._frames:
+            try:
+                self._frames["webcam"].disattiva()
+            except Exception:
+                pass
+
+        self._navigate(key)     # ← mixin: aggiorna sidebar + chiama _show_page
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Costruzione frame pagine (lazy)
+    # ══════════════════════════════════════════════════════════════════════════
+
     def _build_frame(self, key: str) -> ctk.CTkFrame:
-        if key == "webcam":
-            # Passiamo una callback che invia la foto scattata all'Upload
-            return WebcamFrame(self._fc, on_scatto=self._on_foto_scattata)
-        if key == "dashboard":
-            return DashboardFrame(self._fc, on_modifica_tag=self._goto_modifica)
-        if key == "pazienti":
-            return PazientiFrame(self._fc, on_paziente_selezionato=self._goto_upload)
-        if key == "upload":
-            return UploadFrame(self._fc)
-        if key == "import":
-            return BulkImportFrame(self._fc)
-        if key == "statistiche":
-            return StatisticheFrame(self._fc)
-        if key == "backup":
-            return BackupRestoreFrame(self._fc)
-        if key == "modifica_tag":
-            return ModificaTagFrame(self._fc)
-        if key == "webcam":
-            return WebcamFrame(self._fc)
-        if key == "utenti":
-            return GestioneUtentiFrame(self._fc)
-        if key == "before_after":
-            return BeforeAfterFrame(self._fc)
-        if key == "email":
-            return EmailFrame(self._fc)
-        if key == "timeline":
-            return TimelineFrame(self._fc)
-        raise ValueError(key)
+        match key:
+            case "dashboard":
+                return DashboardFrame(self._fc, on_modifica_tag=self._goto_modifica)
+            case "pazienti":
+                return PazientiFrame(self._fc, on_paziente_selezionato=self._goto_upload)
+            case "upload":
+                return UploadFrame(self._fc)
+            case "import":
+                return BulkImportFrame(self._fc)
+            case "statistiche":
+                return StatisticheFrame(self._fc)
+            case "modifica_tag":
+                return ModificaTagFrame(self._fc)
+            case "backup":
+                return BackupRestoreFrame(self._fc)
+            case "webcam":
+                return WebcamFrame(self._fc, on_scatto=self._on_foto_scattata)
+            case "utenti":
+                return GestioneUtentiFrame(self._fc)
+            case "before_after":
+                return BeforeAfterFrame(self._fc)
+            case "email":
+                return EmailFrame(self._fc)
+            case "timeline":
+                return TimelineFrame(self._fc)
+            case _:
+                raise ValueError(f"Frame sconosciuto: {key!r}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Callbacks di navigazione interna
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _on_foto_scattata(self, percorso_foto: str):
         self._naviga("upload")
-        # Forza l'inserimento dell'immagine appena scattata nella dropzone
-        self._frames["upload"]._carica_file(Path(percorso_foto))
+        try:
+            self._frames["upload"]._carica_file(Path(percorso_foto))
+        except Exception:
+            pass
         self.toast("📸 Foto acquisita e pronta per il salvataggio!", "success")
 
     def _goto_upload(self, pid: int):
@@ -1976,8 +1833,118 @@ class App(DnDCTk):
         self._foto_mod = foto_id
         self._naviga("modifica_tag")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Hotkey globali
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _registra_hotkey(self):
+        VOCI_KEYS = [
+            "dashboard", "pazienti", "upload", "import",
+            "statistiche", "modifica_tag", "backup", "webcam", "before_after",
+        ]
+        for i, key in enumerate(VOCI_KEYS, start=1):
+            self.bind_all(f"<Control-Key-{i}>",
+                          lambda e, k=key: self._naviga(k), add="+")
+
+        self.bind_all("<Control-n>", lambda e: self._naviga("pazienti"), add="+")
+        self.bind_all("<Control-N>", lambda e: self._naviga("pazienti"), add="+")
+        self.bind_all("<Control-b>", lambda e: self._backup_rapido(),    add="+")
+        self.bind_all("<Control-B>", lambda e: self._backup_rapido(),    add="+")
+        self.bind_all("<F5>",        lambda e: self._refresh_pagina(),   add="+")
+        self.bind_all("<Control-f>", lambda e: self._focus_ricerca(),    add="+")
+        self.bind_all("<Control-F>", lambda e: self._focus_ricerca(),    add="+")
+        self.bind_all("<Control-k>", lambda e: self._apri_spotlight(),   add="+")
+        self.bind_all("<Control-K>", lambda e: self._apri_spotlight(),   add="+")
+
+    def _refresh_pagina(self):
+        key = self._active_page
+        if key == "dashboard" and "dashboard" in self._frames:
+            self._frames["dashboard"].esegui_ricerca()
+            self._frames["dashboard"]._aggiorna_kpi()
+        elif key == "pazienti" and "pazienti" in self._frames:
+            self._frames["pazienti"].aggiorna_lista()
+        elif key == "statistiche" and "statistiche" in self._frames:
+            self._frames["statistiche"].aggiorna_tutto()
+        self._aggiorna_statusbar()
+        self.toast("Pagina aggiornata", "info", 1800)
+
+    def _focus_ricerca(self):
+        self._naviga("dashboard")
+        try:
+            self._frames["dashboard"]._fp.focus_set()
+        except Exception:
+            pass
+
+    def _apri_spotlight(self):
+        SpotlightSearch(
+            self,
+            on_apri_paziente=self._spotlight_apri_paziente,
+            on_apri_foto=self._spotlight_apri_foto,
+        )
+
+    def _spotlight_apri_paziente(self, pid: int):
+        self._goto_upload(pid)
+        self.toast("Paziente caricato", "info", 2000)
+
+    def _spotlight_apri_foto(self, foto_id: int, foto_data):
+        try:
+            percorso = db.get_percorso_assoluto(foto_data)
+            DettaglioFoto(self, percorso, foto_data,
+                          on_modifica_tag=self._goto_modifica,
+                          tutti_risultati=[foto_data], indice=0)
+        except Exception as e:
+            self.toast(f"Errore apertura foto: {e}", "error")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Status bar
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _avvia_refresh_statusbar(self):
+        self._aggiorna_statusbar()
+        self.after(60_000, self._avvia_refresh_statusbar)
+
+    def _aggiorna_statusbar(self):
+        def _fetch():
+            try:
+                stats   = db.kpi_stats()
+                utente  = SessioneUtente.nome_display() if SessioneUtente.corrente else "—"
+                self.after(0, lambda: self._applica_statusbar(stats, utente))
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _applica_statusbar(self, stats: dict, utente: str):
+        try:
+            self._sb_utente.configure(text=f"👤  {utente}")
+            self._sb_stats.configure(
+                text=(f"Pazienti: {stats['pazienti']}   "
+                      f"Foto: {stats['foto_totali']}   "
+                      f"Oggi: {stats['foto_oggi']}   "
+                      f"DB: {stats['db_size_mb']} MB")
+            )
+            bk = stats.get("ultimo_backup")
+            if bk:
+                import datetime
+                mtime   = datetime.datetime.fromtimestamp(bk.stat().st_mtime)
+                bk_txt  = f"💾  Backup: {mtime.strftime('%d/%m/%Y %H:%M')}"
+            else:
+                bk_txt  = "💾  Nessun backup"
+            self._sb_backup.configure(text=bk_txt)
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Toast shortcut
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def toast(self, messaggio: str, tipo: str = "info", durata_ms: int = 3500):
+        ToastManager.mostra(messaggio, tipo, durata_ms)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Session lock
+    # ══════════════════════════════════════════════════════════════════════════
+
     def _avvia_timer_lock(self):
-        """Controlla ogni 30s se la sessione è scaduta per inattività."""
         from auth import INATTIVITA_MIN
         if INATTIVITA_MIN > 0 and not self._lock_aperto:
             if SessioneUtente.corrente and SessioneUtente.is_scaduta():
@@ -1997,13 +1964,15 @@ class App(DnDCTk):
     def _logout(self):
         SessioneUtente.logout()
         self.destroy()
-        # Riavvia il login screen
-        import subprocess, sys
+        import subprocess
         subprocess.Popen([sys.executable, __file__])
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Backup rapido (Ctrl+B)
+    # ══════════════════════════════════════════════════════════════════════════
+
     def _backup_rapido(self):
-        """Backup immediato nella cartella dell'app senza dialogo."""
-        if hasattr(self, '_backup_in_corso') and self._backup_in_corso:
+        if self._backup_in_corso:
             self.toast("Backup già in corso…", "warning")
             return
         self._backup_in_corso = True
@@ -2021,7 +1990,7 @@ class App(DnDCTk):
             if "err" in result:
                 self.toast(f"Backup fallito: {result['err']}", "error", 6000)
             else:
-                self.toast(f"✅  Backup salvato con successo", "success")
+                self.toast("✅  Backup salvato con successo", "success")
             self._aggiorna_statusbar()
 
         threading.Thread(
@@ -2029,27 +1998,72 @@ class App(DnDCTk):
             daemon=True,
         ).start()
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Auto-Import Reflex (watchdog)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _toggle_watchdog(self):
+        T = MODERN_THEME
+        if self._watchdog and self._watchdog.is_running:
+            self._watchdog.stop()
+            self._btn_watchdog.configure(
+                text="📷  Auto-Import",
+                fg_color=T["bg_panel"],
+                text_color=T["text_secondary"],
+            )
+            self.toast("Auto-Import Reflex disattivato.", "info")
+            return
+
+        cartella = filedialog.askdirectory(
+            title="Seleziona la cartella della Reflex / SD Wi-Fi"
+        )
+        if not cartella:
+            return
+
+        try:
+            self._watchdog = CameraWatchdog(
+                folder_path=cartella,
+                on_new_file=self._on_nuova_foto_reflex,
+            )
+            self._watchdog.start()
+            self._btn_watchdog.configure(
+                text="📷  IN ASCOLTO…",
+                fg_color=MODERN_THEME["success"],
+                text_color="#000000",
+            )
+            self.toast(f"In ascolto su: {Path(cartella).name}", "success")
+        except Exception as e:
+            self.toast(f"Errore avvio Auto-Import: {e}", "error")
+
+    def _on_nuova_foto_reflex(self, percorso_foto: Path):
+        """Chiamata dal thread background del watchdog."""
+        self.after(0, lambda p=percorso_foto: self._processa_foto_reflex(p))
+
+    def _processa_foto_reflex(self, percorso_foto: Path):
+        """Eseguita nel main thread Tkinter."""
+        self._naviga("upload")
+        if "upload" in self._frames:
+            try:
+                self._frames["upload"]._carica_file(percorso_foto)
+            except Exception:
+                pass
+            self.toast("📸 Nuova foto importata dalla Reflex!", "success")
+
 
 # ===========================================================================
 # ENTRY POINT
 # ===========================================================================
 
 def _fix_scrollwheel(root):
-    """
-    Fix per il bug di CTkScrollableFrame su Windows:
-    la rotella del mouse non scrolla se il cursore è sopra un widget figlio.
-    """
+    """Fix rotella mouse su CTkScrollableFrame (Windows)."""
     import platform
     if platform.system() != "Windows":
         return
 
     def _on_wheel(event):
-        widget = event.widget
-        # Risale la gerarchia finché trova un CTkScrollableFrame
-        w = widget
+        w = event.widget
         while w:
             if isinstance(w, ctk.CTkScrollableFrame):
-                # Scrolla il canvas interno
                 try:
                     w._parent_canvas.yview_scroll(
                         int(-1 * (event.delta / 120)), "units")
@@ -2069,51 +2083,44 @@ if __name__ == "__main__":
     from auth import init_auth_db, SessioneUtente
     import logging
 
-    # 1. Inizializziamo il Logging (crea un file errori_app.log nella cartella dei dati)
     logging.basicConfig(
         filename=str(db.APP_DIR / "errori_app.log"),
         level=logging.ERROR,
-        format="%(asctime)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    # 2. Inizializziamo i Database (Pazienti e Utenti)
     db.init_db()
     init_auth_db()
 
-    # 3. Gestione dell'accesso
     login_successo = False
 
     if DEBUG_MODE:
-        # Tenta di loggare automaticamente l'admin per velocizzare il debug
         with db.get_connection() as conn:
-            admin = conn.execute("SELECT * FROM utenti WHERE username = 'admin'").fetchone()
+            admin = conn.execute(
+                "SELECT * FROM utenti WHERE username = 'admin'"
+            ).fetchone()
             if admin:
                 SessioneUtente.login(admin)
                 login_successo = True
                 print("--- DEBUG MODE: Login bypassato (Admin) ---")
             else:
-                # Se l'admin non esiste (primo avvio in assoluto), apriamo il login
                 from ui_login import LoginScreen
                 win_login = LoginScreen()
                 win_login.mainloop()
-                login_successo = getattr(win_login, 'login_riuscito', False)
+                login_successo = getattr(win_login, "login_riuscito", False)
     else:
-        # Modalità normale per il pubblico
         from ui_login import LoginScreen
         win_login = LoginScreen()
         win_login.mainloop()
-        login_successo = getattr(win_login, 'login_riuscito', False)
+        login_successo = getattr(win_login, "login_riuscito", False)
 
-    # 4. Avvio dell'applicazione principale solo se il login è ok
     if login_successo:
         app = App()
-        # Funzione opzionale per sistemare la rotella del mouse su Windows
-        if "_fix_scrollwheel" in globals():
-            _fix_scrollwheel(app)
-        
-        # Intercettatore globale di errori per la UI
+        _fix_scrollwheel(app)
+
         def handle_exception(exc_type, exc_value, exc_traceback):
-            logging.error("Errore non gestito:", exc_info=(exc_type, exc_value, exc_traceback))
-        
+            logging.error("Errore non gestito:",
+                          exc_info=(exc_type, exc_value, exc_traceback))
+
         app.report_callback_exception = handle_exception
         app.mainloop()
