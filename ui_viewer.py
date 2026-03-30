@@ -1,425 +1,291 @@
-"""
-ui_viewer.py
-============
-Visualizzatore fotografico full-screen con:
-  - Zoom in/out con rotella del mouse (fino a 8×)
-  - Pan (trascinamento con click sinistro)
-  - Fit-to-window / zoom reale (pulsanti)
-  - Navigazione prev/next tra i risultati di una galleria
-  - Overlay metadati clinici (toggle con tasto M)
-  - Tasto ESC per chiudere
-
-Uso:
-    from ui_viewer import ViewerFoto
-    ViewerFoto(master, foto_rows=lista_rows_db, indice_iniziale=0)
-
-    oppure per aprire una singola foto:
-    ViewerFoto(master, foto_rows=[singola_row], indice_iniziale=0)
-"""
-
 import tkinter as tk
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageFont
-from pathlib import Path
-from typing import Optional
-import math
+from PIL import Image, ImageTk
+import os
+import database as db 
 
-import database as db
-
-# ---------------------------------------------------------------------------
-# Palette
-# ---------------------------------------------------------------------------
-
-COLORI = {
-    "sfondo":        "#0a0a14",
-    "overlay_bg":    "#000000cc",
-    "testo_chiaro":  "#e0e0e0",
-    "testo_grigio":  "#9e9e9e",
-    "accent":        "#0f3460",
-    "accent_bright": "#e94560",
-    "verde_ok":      "#4caf50",
-    "ctrl_bg":       "#1a1a2e",
-    "ctrl_btn":      "#16213e",
-}
-
-# Limiti zoom
-ZOOM_MIN = 0.1
-ZOOM_MAX = 8.0
-ZOOM_STEP = 0.15   # delta moltiplicativo per ogni scroll
-
-
-# ===========================================================================
-# FINESTRA VIEWER
-# ===========================================================================
 
 class ViewerFoto(ctk.CTkToplevel):
-    """
-    Finestra di visualizzazione full-screen.
-
-    Args:
-        master:          widget Tk padre
-        foto_rows:       lista di sqlite3.Row (output di db.cerca_foto)
-        indice_iniziale: indice dell'immagine da mostrare all'apertura
-    """
-
-    def __init__(self, master, foto_rows: list, indice_iniziale: int = 0):
+    def __init__(self, master, risultati: list[dict], indice_iniziale: int):
         super().__init__(master)
+        self.risultati = risultati
+        self.indice = indice_iniziale
 
-        self._righe    = foto_rows
-        self._indice   = max(0, min(indice_iniziale, len(foto_rows) - 1))
-        self._zoom     = 1.0
-        self._offset_x = 0
-        self._offset_y = 0
-        self._drag_x   = 0
-        self._drag_y   = 0
-        self._mostra_meta = True
+        self.title("Visualizzatore Immagini")
+        self.configure(fg_color="#080c18")
+        self.attributes("-fullscreen", False)
 
-        # Immagine PIL originale (full-res, ricaricata ad ogni navigazione)
-        self._pil_originale: Optional[Image.Image] = None
-        # PhotoImage per tk.Canvas (riferimento anti-GC)
-        self._tk_image: Optional[tk.PhotoImage] = None
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        w = int(sw * 0.92)
+        h = int(sh * 0.92)
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.resizable(True, True)
+
+        self.grab_set()
+        self.focus_force()
+
+        # Stato zoom/pan
+        self._scale = 1.0
+        self._offset_x = 0.0
+        self._offset_y = 0.0
+        self._pan_start_x = 0
+        self._pan_start_y = 0
+        self._panning = False
+
+        # Immagine PIL originale e PhotoImage reference
+        self._pil_img: Image.Image | None = None
+        self._tk_img: ImageTk.PhotoImage | None = None
 
         self._build_ui()
-        self._carica_immagine(self._indice)
-        # Porta la finestra in primo piano — fix "apre in background" su Windows
-        self.after(50, self._porta_in_primo_piano)
+        self._load_image()
+        self._bind_events()
 
-    def _porta_in_primo_piano(self):
-        self.lift()
-        self.focus_force()
-        self.attributes("-topmost", True)
-        self.after(200, lambda: self.attributes("-topmost", False))
-
-        # Tasto ESC per chiudere
-        self.bind("<Escape>", lambda e: self.destroy())
-        # M per toggle metadati
-        self.bind("<m>", lambda e: self._toggle_meta())
-        self.bind("<M>", lambda e: self._toggle_meta())
-        # Frecce per navigazione
-        self.bind("<Left>",  lambda e: self._naviga(-1))
-        self.bind("<Right>", lambda e: self._naviga(+1))
-        # +/- per zoom da tastiera
-        self.bind("<plus>",  lambda e: self._zoom_tastiera(+1))
-        self.bind("<minus>", lambda e: self._zoom_tastiera(-1))
-
-    # ------------------------------------------------------------------
-    # UI
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ UI --
     def _build_ui(self):
-        self.title("DentalPhoto — Visualizzatore")
-        self.geometry("1100x780")
-        self.minsize(600, 450)
-        self.configure(fg_color=COLORI["sfondo"])
-
-        self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)
+        self.grid_columnconfigure(0, weight=1)
 
-        # Canvas principale (immagine)
-        self._canvas = tk.Canvas(
+        # Canvas principale
+        self.canvas = tk.Canvas(
             self,
-            bg=COLORI["sfondo"],
+            bg="#080c18",
             highlightthickness=0,
             cursor="fleur",
         )
-        self._canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
 
-        # Binding mouse sul canvas
-        self._canvas.bind("<ButtonPress-1>",   self._drag_start)
-        self._canvas.bind("<B1-Motion>",       self._drag_move)
-        self._canvas.bind("<MouseWheel>",      self._scroll_zoom)     # Windows/macOS
-        self._canvas.bind("<Button-4>",        self._scroll_zoom)     # Linux scroll up
-        self._canvas.bind("<Button-5>",        self._scroll_zoom)     # Linux scroll down
-        self._canvas.bind("<Configure>",       lambda e: self._ridisegna())
+        # Overlay metadati (frame semitrasparente simulato con Canvas rettangolo)
+        self._overlay_frame = tk.Frame(self, bg="#0f1629")
+        self._overlay_frame.grid(row=0, column=0, sticky="sew")
+        self._overlay_frame.configure(height=64)
+        self._overlay_frame.grid_propagate(False)
 
-        # Barra controlli in basso
-        ctrl = ctk.CTkFrame(self, fg_color=COLORI["ctrl_bg"], height=52, corner_radius=0)
-        ctrl.grid(row=1, column=0, sticky="ew")
-        ctrl.grid_propagate(False)
+        self._meta_label = tk.Label(
+            self._overlay_frame,
+            text="",
+            fg="#c8d8f0",
+            bg="#0f1629",
+            font=("Segoe UI", 11),
+            anchor="w",
+            padx=16,
+        )
+        self._meta_label.pack(side="left", fill="both", expand=True)
 
-        # Navigazione
-        self._btn_prev = ctk.CTkButton(
-            ctrl, text="◀", width=40, height=36, font=("Segoe UI", 14),
-            fg_color=COLORI["ctrl_btn"],
-            command=lambda: self._naviga(-1))
-        self._btn_prev.pack(side="left", padx=(12, 4), pady=8)
+        # Pulsanti navigazione
+        btn_cfg = dict(bg="#0f1629", fg="#c8d8f0", font=("Segoe UI", 22, "bold"),
+                       relief="flat", activebackground="#0f3460", activeforeground="white",
+                       cursor="hand2", bd=0, padx=12, pady=4)
 
-        self._lbl_indice = ctk.CTkLabel(
-            ctrl, text="", font=("Segoe UI", 11),
-            text_color=COLORI["testo_grigio"], width=80)
-        self._lbl_indice.pack(side="left", padx=4)
+        self._btn_prev = tk.Button(self._overlay_frame, text="◀", command=self._prev, **btn_cfg)
+        self._btn_prev.pack(side="right", padx=4)
 
-        self._btn_next = ctk.CTkButton(
-            ctrl, text="▶", width=40, height=36, font=("Segoe UI", 14),
-            fg_color=COLORI["ctrl_btn"],
-            command=lambda: self._naviga(+1))
-        self._btn_next.pack(side="left", padx=(4, 16))
+        self._btn_next = tk.Button(self._overlay_frame, text="▶", command=self._next, **btn_cfg)
+        self._btn_next.pack(side="right", padx=4)
 
-        # Separatore
-        ctk.CTkFrame(ctrl, width=1, height=32,
-                     fg_color=COLORI["accent"]).pack(side="left", padx=8)
+        self._counter_label = tk.Label(
+            self._overlay_frame,
+            text="",
+            fg="#7090b0",
+            bg="#0f1629",
+            font=("Segoe UI", 10),
+            padx=8,
+        )
+        self._counter_label.pack(side="right")
 
-        # Zoom
-        ctk.CTkButton(ctrl, text="🔍−", width=40, height=36, font=("Segoe UI", 13),
-                      fg_color=COLORI["ctrl_btn"],
-                      command=lambda: self._zoom_tastiera(-1)).pack(side="left", padx=4)
+        btn_close = tk.Button(
+            self._overlay_frame,
+            text="✕",
+            command=self.destroy,
+            bg="#0f1629", fg="#c83060",
+            font=("Segoe UI", 14, "bold"),
+            relief="flat", activebackground="#3a0a18", activeforeground="#ff4070",
+            cursor="hand2", bd=0, padx=10, pady=4,
+        )
+        btn_close.pack(side="right", padx=8)
 
-        self._lbl_zoom = ctk.CTkLabel(ctrl, text="100%", font=("Segoe UI", 11),
-                                       text_color=COLORI["testo_chiaro"], width=54)
-        self._lbl_zoom.pack(side="left", padx=4)
+        btn_reset = tk.Button(
+            self._overlay_frame,
+            text="⊙",
+            command=self._reset_view,
+            bg="#0f1629", fg="#50a0d0",
+            font=("Segoe UI", 16),
+            relief="flat", activebackground="#0f3460", activeforeground="white",
+            cursor="hand2", bd=0, padx=8, pady=4,
+        )
+        btn_reset.pack(side="right", padx=2)
 
-        ctk.CTkButton(ctrl, text="🔍+", width=40, height=36, font=("Segoe UI", 13),
-                      fg_color=COLORI["ctrl_btn"],
-                      command=lambda: self._zoom_tastiera(+1)).pack(side="left", padx=4)
+    # ---------------------------------------------------------- Bindings --
+    def _bind_events(self):
+        self.bind("<Left>", lambda e: self._prev())
+        self.bind("<Right>", lambda e: self._next())
+        self.bind("<Escape>", lambda e: self.destroy())
 
-        ctk.CTkButton(ctrl, text="Fit", width=40, height=36, font=("Segoe UI", 11),
-                      fg_color=COLORI["ctrl_btn"],
-                      command=self._zoom_fit).pack(side="left", padx=(8, 4))
+        self.canvas.bind("<ButtonPress-1>", self._pan_start)
+        self.canvas.bind("<B1-Motion>", self._pan_move)
+        self.canvas.bind("<ButtonRelease-1>", self._pan_end)
 
-        ctk.CTkButton(ctrl, text="1:1", width=40, height=36, font=("Segoe UI", 11),
-                      fg_color=COLORI["ctrl_btn"],
-                      command=self._zoom_reale).pack(side="left", padx=4)
+        # Zoom con rotella – Windows/Linux
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        # Linux (Button-4/5)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)
+        self.canvas.bind("<Button-5>", self._on_mousewheel)
 
-        # Separatore
-        ctk.CTkFrame(ctrl, width=1, height=32,
-                     fg_color=COLORI["accent"]).pack(side="left", padx=8)
+        self.canvas.bind("<Configure>", self._on_resize)
 
-        # Toggle metadati
-        self._btn_meta = ctk.CTkButton(
-            ctrl, text="📋 Info", width=70, height=36, font=("Segoe UI", 11),
-            fg_color=COLORI["accent"],
-            command=self._toggle_meta)
-        self._btn_meta.pack(side="left", padx=4)
+    # ------------------------------------------------------- Navigation --
+    def _prev(self):
+        if self.risultati:
+            self.indice = (self.indice - 1) % len(self.risultati)
+            self._load_image()
 
-        # Titolo foto (lato destro)
-        self._lbl_titolo = ctk.CTkLabel(
-            ctrl, text="", font=("Segoe UI", 10),
-            text_color=COLORI["testo_grigio"], anchor="e")
-        self._lbl_titolo.pack(side="right", padx=16)
+    def _next(self):
+        if self.risultati:
+            self.indice = (self.indice + 1) % len(self.risultati)
+            self._load_image()
 
-        # ESC hint
-        ctk.CTkLabel(ctrl, text="ESC chiudi  |  M meta  |  ← →",
-                     font=("Segoe UI", 8),
-                     text_color=COLORI["testo_grigio"]).pack(side="right", padx=8)
-
-    # ------------------------------------------------------------------
-    # Caricamento e rendering
-    # ------------------------------------------------------------------
-
-    def _carica_immagine(self, idx: int):
-        """Carica l'immagine al dato indice dal DB e aggiorna il canvas."""
-        if not self._righe:
+# -------------------------------------------------------- Load image --
+    def _load_image(self):
+        if not self.risultati:
             return
-
-        r = self._righe[idx]
-        percorso = db.get_percorso_assoluto(r)
-
+        item = self.risultati[self.indice]
+        
+        # Usa la funzione del DB per ottenere il percorso assoluto corretto
+        path = db.get_percorso_assoluto(item)
+        
         try:
-            self._pil_originale = Image.open(percorso).convert("RGB")
-        except Exception:
-            # Placeholder errore
-            self._pil_originale = Image.new("RGB", (800, 600), (30, 30, 45))
-            draw = ImageDraw.Draw(self._pil_originale)
-            draw.text((300, 280), "File non disponibile", fill=(150, 150, 150))
+            self._pil_img = Image.open(path)
+        except Exception as e:
+            print(f"Errore caricamento immagine: {e}") # Utile per debug
+            self._pil_img = Image.new("RGB", (800, 600), "#1a2040")
 
-        # Calcola zoom fit iniziale
-        self._zoom_fit(ridisegna=False)
+        self._reset_view(render=False)
+        self._render()
+        self._update_meta(item)
 
-        # Reset pan al centro
-        self._offset_x = 0
-        self._offset_y = 0
-
-        # Aggiorna label
-        n = len(self._righe)
-        self._lbl_indice.configure(text=f"{idx + 1} / {n}")
-        self._lbl_titolo.configure(
-            text=f"{r['cognome']} {r['nome']}  |  "
-                 f"{r['branca'] or '—'} / {r['dente'] or '—'} / {r['fase'] or '—'}")
-
-        # Abilita/disabilita frecce
-        self._btn_prev.configure(state="normal" if idx > 0 else "disabled")
-        self._btn_next.configure(state="normal" if idx < n - 1 else "disabled")
-
-        self._ridisegna()
-
-    def _ridisegna(self):
-        """Ridisegna il canvas con l'immagine corrente a zoom/pan correnti."""
-        if self._pil_originale is None:
-            return
-
-        cw = self._canvas.winfo_width()
-        ch = self._canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            return
-
-        w_orig, h_orig = self._pil_originale.size
-        new_w = max(1, int(w_orig * self._zoom))
-        new_h = max(1, int(h_orig * self._zoom))
-
-        # Ridimensiona con Pillow (NEAREST sopra 2× per performance, LANCZOS sotto)
-        filtro = Image.NEAREST if self._zoom > 2.0 else Image.LANCZOS
-        img_resized = self._pil_originale.resize((new_w, new_h), filtro)
-
-        # Posizione centro + offset pan
-        x = cw // 2 + self._offset_x
-        y = ch // 2 + self._offset_y
-
-        # Converti in PhotoImage (tk)
-        self._tk_image = self._pil_to_tk(img_resized)
-
-        self._canvas.delete("all")
-        self._canvas.create_image(x, y, image=self._tk_image, anchor="center")
-
-        # Overlay metadati
-        if self._mostra_meta and self._righe:
-            self._disegna_overlay(cw, ch)
-
-        # Label zoom
-        self._lbl_zoom.configure(text=f"{int(self._zoom * 100)}%")
-
-    @staticmethod
-    def _pil_to_tk(img: Image.Image) -> tk.PhotoImage:
-        """Converte un'immagine PIL in PhotoImage senza dipendenze extra."""
-        import io
-        buf = io.BytesIO()
-        img.save(buf, format="PPM")
-        buf.seek(0)
-        return tk.PhotoImage(data=buf.read())
-
-    def _disegna_overlay(self, cw: int, ch: int):
-        """Disegna il pannello semitrasparente dei metadati in alto a sinistra."""
-        r = self._righe[self._indice]
-
-        righe_meta = [
-            f"👤  {r['cognome']} {r['nome']}",
-            f"🦷  {r['dente'] or '—'}",
-            f"🏥  {r['branca'] or '—'}",
-            f"🔬  {r['fase'] or '—'}",
-            f"📅  {r['data_scatto'] or '—'}",
-        ]
-        if r["note"]:
-            righe_meta.append(f"📝  {r['note'][:50]}")
-
-        box_w = 260
-        line_h = 20
-        pad = 10
-        box_h = len(righe_meta) * line_h + pad * 2
-
-        x0, y0 = 16, 16
-        x1, y1 = x0 + box_w, y0 + box_h
-
-        # Sfondo scuro semitrasparente (stipple per simulare trasparenza su tk)
-        self._canvas.create_rectangle(
-            x0, y0, x1, y1,
-            fill="#000000", stipple="gray50", outline="",
-        )
-        self._canvas.create_rectangle(
-            x0, y0, x1, y1,
-            fill="", outline="#0f3460", width=1,
+    # --------------------------------------------------------- Metadata --
+    def _update_meta(self, item: dict):
+        dente = item.get("dente", "—")
+        fase = item.get("fase", "—")
+        data = item.get("data_scatto", "—")
+        id_ = item.get("id", "—")
+        text = f"  ID: {id_}   |   Dente: {dente}   |   Fase: {fase}   |   Data: {data}"
+        self._meta_label.configure(text=text)
+        self._counter_label.configure(
+            text=f"{self.indice + 1} / {len(self.risultati)}"
         )
 
-        # Testo righe
-        for i, testo in enumerate(righe_meta):
-            self._canvas.create_text(
-                x0 + pad, y0 + pad + i * line_h,
-                text=testo,
-                anchor="nw",
-                fill="#e0e0e0",
-                font=("Segoe UI", 9),
-            )
+    # -------------------------------------------------------- Reset view --
+    def _reset_view(self, render=True):
+        self._scale = 1.0
+        self._offset_x = 0.0
+        self._offset_y = 0.0
+        if render:
+            self._render()
 
-    # ------------------------------------------------------------------
-    # Zoom
-    # ------------------------------------------------------------------
-
-    def _zoom_fit(self, ridisegna: bool = True):
-        """Adatta l'immagine alla finestra."""
-        if self._pil_originale is None:
+    # ----------------------------------------------------------- Render --
+    # ----------------------------------------------------------- Render --
+    def _render(self):
+        if self._pil_img is None:
             return
-        self.update_idletasks()
-        cw = self._canvas.winfo_width()
-        ch = self._canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            self._zoom = 1.0
+            
+        cw = self.canvas.winfo_width() or 1
+        ch = self.canvas.winfo_height() or 1
+
+        img_w, img_h = self._pil_img.size
+
+        # Fit-to-canvas base scale
+        base_scale = min(cw / img_w, ch / img_h)
+        display_scale = base_scale * self._scale
+
+        # Centro dell'immagine sul canvas
+        cx = cw / 2 + self._offset_x
+        cy = ch / 2 + self._offset_y
+
+        # --- SMART CROPPING (Addio Lag!) ---
+        # Calcoliamo quale porzione dell'immagine originale è attualmente visibile nello schermo.
+        left = (0 - cx) / display_scale + img_w / 2
+        top = (0 - cy) / display_scale + img_h / 2
+        right = (cw - cx) / display_scale + img_w / 2
+        bottom = (ch - cy) / display_scale + img_h / 2
+
+        # Assicuriamoci di non ritagliare fuori dai bordi reali dell'immagine
+        crop_left = max(0, int(left))
+        crop_top = max(0, int(top))
+        crop_right = min(img_w, int(right))
+        crop_bottom = min(img_h, int(bottom))
+
+        self.canvas.delete("img")
+
+        # Se l'immagine è stata trascinata completamente fuori dallo schermo, non disegniamo nulla
+        if crop_right <= crop_left or crop_bottom <= crop_top:
             return
-        w, h = self._pil_originale.size
-        self._zoom = min(cw / w, ch / h, 1.0)
-        self._offset_x = 0
-        self._offset_y = 0
-        if ridisegna:
-            self._ridisegna()
 
-    def _zoom_reale(self):
-        """Zoom 1:1."""
-        self._zoom = 1.0
-        self._offset_x = 0
-        self._offset_y = 0
-        self._ridisegna()
+        # 1. Ritagliamo SOLO il pezzo di immagine originale che l'utente sta effettivamente guardando
+        cropped = self._pil_img.crop((crop_left, crop_top, crop_right, crop_bottom))
 
-    def _zoom_tastiera(self, direzione: int):
-        delta = ZOOM_STEP * direzione
-        self._zoom = max(ZOOM_MIN, min(ZOOM_MAX, self._zoom + delta))
-        self._ridisegna()
+        # 2. Calcoliamo quanto deve essere grande questo frammento sul monitor
+        target_w = max(1, int((crop_right - crop_left) * display_scale))
+        target_h = max(1, int((crop_bottom - crop_top) * display_scale))
 
-    def _scroll_zoom(self, event: tk.Event):
-        """Zoom con la rotella del mouse, centrato sul cursore."""
-        # Determina la direzione della rotella (Windows/macOS vs Linux)
-        if event.num == 4 or event.delta > 0:
-            factor = 1 + ZOOM_STEP
+        # 3. Ridimensioniamo solo questo piccolo frammento. 
+        # Usiamo BILINEAR invece di LANCZOS: la differenza a occhio è nulla, ma è infinitamente più veloce.
+        resized = cropped.resize((target_w, target_h), Image.BILINEAR)
+        self._tk_img = ImageTk.PhotoImage(resized)
+
+        # 4. Posizioniamo il frammento sul canvas (partendo dall'angolo in alto a sinistra)
+        draw_x = (crop_left - img_w / 2) * display_scale + cx
+        draw_y = (crop_top - img_h / 2) * display_scale + cy
+
+        self.canvas.create_image(draw_x, draw_y, image=self._tk_img, anchor="nw", tags="img")
+
+    # ------------------------------------------------------------ Zoom --
+    def _on_mousewheel(self, event):
+        # Determina direzione
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
         else:
-            factor = 1 - ZOOM_STEP
+            delta = 1 if event.delta > 0 else -1
 
-        nuovo_zoom = max(ZOOM_MIN, min(ZOOM_MAX, self._zoom * factor))
+        zoom_factor = 1.12 if delta > 0 else 1 / 1.12
 
-        if nuovo_zoom != self._zoom:
-            # Zoom verso il cursore: aggiusta l'offset
-            cw = self._canvas.winfo_width()
-            ch = self._canvas.winfo_height()
-            dx = event.x - cw // 2 - self._offset_x
-            dy = event.y - ch // 2 - self._offset_y
-            scala = nuovo_zoom / self._zoom
-            self._offset_x += dx * (1 - scala)
-            self._offset_y += dy * (1 - scala)
-            self._zoom = nuovo_zoom
-            self._ridisegna()
+        # Coordinate del mouse relative al centro canvas
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        mx = event.x - cw / 2
+        my = event.y - ch / 2
 
-    # ------------------------------------------------------------------
-    # Pan
-    # ------------------------------------------------------------------
+        # Aggiorna offset in modo che il punto sotto il cursore rimanga fisso
+        self._offset_x = mx + (self._offset_x - mx) * zoom_factor
+        self._offset_y = my + (self._offset_y - my) * zoom_factor
 
-    def _drag_start(self, event: tk.Event):
-        self._drag_x = event.x
-        self._drag_y = event.y
+        self._scale = max(0.05, min(self._scale * zoom_factor, 40.0))
+        self._render()
 
-    def _drag_move(self, event: tk.Event):
-        dx = event.x - self._drag_x
-        dy = event.y - self._drag_y
+    # ------------------------------------------------------------- Pan --
+    def _pan_start(self, event):
+        self._panning = True
+        self._pan_start_x = event.x
+        self._pan_start_y = event.y
+
+    def _pan_move(self, event):
+        if not self._panning:
+            return
+        dx = event.x - self._pan_start_x
+        dy = event.y - self._pan_start_y
         self._offset_x += dx
         self._offset_y += dy
-        self._drag_x = event.x
-        self._drag_y = event.y
-        self._ridisegna()
+        self._pan_start_x = event.x
+        self._pan_start_y = event.y
+        self._render()
 
-    # ------------------------------------------------------------------
-    # Navigazione
-    # ------------------------------------------------------------------
+    def _pan_end(self, event):
+        self._panning = False
 
-    def _naviga(self, delta: int):
-        nuovo = self._indice + delta
-        if 0 <= nuovo < len(self._righe):
-            self._indice = nuovo
-            self._zoom   = 1.0
-            self._offset_x = 0
-            self._offset_y = 0
-            self._carica_immagine(self._indice)
-
-    # ------------------------------------------------------------------
-    # Metadati
-    # ------------------------------------------------------------------
-
-    def _toggle_meta(self):
-        self._mostra_meta = not self._mostra_meta
-        col = COLORI["accent_bright"] if self._mostra_meta else COLORI["ctrl_btn"]
-        self._btn_meta.configure(fg_color=col)
-        self._ridisegna()
+    # ---------------------------------------------------------- Resize --
+    def _on_resize(self, event):
+        self._render()

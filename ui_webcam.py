@@ -1,580 +1,211 @@
-"""
-ui_webcam.py
-============
-Pannello di acquisizione fotografica diretta da webcam/fotocamera USB.
-
-Funzionalità:
-  - Lista di device disponibili (scan automatico)
-  - Anteprima live a 30 fps via OpenCV → tk.Canvas
-  - Scatto singolo con anteprima freeze e conferma
-  - Tagging immediato (paziente, dente, branca, fase, nota)
-  - Salvataggio nel DB come upload_foto() standard
-  - Hotkey: SPAZIO per scattare, ESC per annullare
-
-Dipendenze: opencv-python-headless (pip install opencv-python-headless)
-"""
-
 import tkinter as tk
-from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
-from datetime import date
-from pathlib import Path
-from typing import Optional
+import cv2
+import os
+import datetime
 import threading
-import time
-import io
-import tempfile
 
-import database as db
-
-# ---------------------------------------------------------------------------
-# Prova a importare OpenCV — gestione graceful se mancante
-# ---------------------------------------------------------------------------
-try:
-    import cv2
-    CV2_OK = True
-except ImportError:
-    cv2 = None
-    CV2_OK = False
-
-# ---------------------------------------------------------------------------
-# Palette / Font
-# ---------------------------------------------------------------------------
-
-COLORI = {
-    "bg":         "#0a0a14",
-    "card":       "#16213e",
-    "entry_bg":   "#0d1117",
-    "accent":     "#0f3460",
-    "accent_br":  "#e94560",
-    "verde":      "#4caf50",
-    "grigio":     "#9e9e9e",
-    "chiaro":     "#e0e0e0",
-    "rosso":      "#f44336",
-    "preview_bg": "#000000",
-    "freeze_border": "#e94560",
-    "arancio": "#ff9800",
-}
-
-FONT_SEZ  = ("Segoe UI", 13, "bold")
-FONT_NRM  = ("Segoe UI", 12)
-FONT_SML  = ("Segoe UI", 10)
-FONT_MICRO= ("Segoe UI", 9)
-
-PREVIEW_W = 640
-PREVIEW_H = 480
-
-MAX_DEVICES = 6   # numero massimo di device da scandire
-
-
-# ---------------------------------------------------------------------------
-# Rilevamento dispositivi webcam
-# ---------------------------------------------------------------------------
-
-def _scan_dispositivi() -> list[tuple[int, str]]:
-    """
-    Scansiona gli indici 0..MAX_DEVICES e restituisce quelli aperibili.
-    Restituisce lista di (indice, etichetta).
-    Non disponibile se cv2 non è installato.
-    """
-    if not CV2_OK:
-        return []
-    trovati = []
-    # Silenzia i warning DSHOW di OpenCV durante la scansione
-    old_level = cv2.setLogLevel(0) if hasattr(cv2, "setLogLevel") else None
-    for i in range(MAX_DEVICES):
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW if hasattr(cv2, 'CAP_DSHOW') else 0)
-        if cap.isOpened():
-            trovati.append((i, f"Camera {i}"))
-            cap.release()
-    if old_level is not None:
-        cv2.setLogLevel(old_level)
-    return trovati
-
-
-# ===========================================================================
-# FRAME: ACQUISIZIONE WEBCAM
-# ===========================================================================
 
 class WebcamFrame(ctk.CTkFrame):
-    """
-    Pannello principale webcam.
+    def __init__(self, master, on_scatto=None, **kwargs):
+        kwargs.setdefault("fg_color", "#0f1629")
+        kwargs.setdefault("corner_radius", 12)
+        super().__init__(master, **kwargs)
 
-    Layout:
-      Sinistra (2/3) → preview live + controlli camera
-      Destra  (1/3)  → selezione paziente + tag + salvataggio
-    """
+        self.on_scatto = on_scatto
 
-    def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
+        self._cap: cv2.VideoCapture | None = None
+        self._cam_index = 0
+        self._running = False
+        self._after_id = None
+        self._tk_img: ImageTk.PhotoImage | None = None
+        self._last_frame = None          # numpy array BGR – ultimo frame catturato
+        self._frame_lock = threading.Lock()
 
-        self._cap: Optional["cv2.VideoCapture"] = None
-        self._live: bool = False          # True = stream attivo
-        self._frozen: bool = False        # True = foto scattata, stream in pausa
-        self._frame_corrente = None       # ultimo frame OpenCV (BGR)
-        self._frame_freeze   = None       # frame congelato allo scatto
-        self._tk_img: Optional[ImageTk.PhotoImage] = None
-        self._stream_thread: Optional[threading.Thread] = None
-        self._paz_id: Optional[int] = None
-        self._after_ids: list = []        # tiene traccia dei callback after() pendenti
+        self._max_cam_index = 4          # prova fino a indice 4
+        self._frame_delay_ms = 33        # ~30 fps
 
         self._build_ui()
-        self._ricarica_dispositivi()
-        self._ricarica_pazienti()
+        self._start_camera(self._cam_index)
 
-    # ------------------------------------------------------------------
-    # UI
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ UI --
     def _build_ui(self):
-
-        self.grid_columnconfigure(0, weight=2)
-        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)
+        self.grid_columnconfigure(0, weight=1)
 
-        # ── Colonna sinistra: camera ──────────────────────────────────
-        cc = ctk.CTkFrame(self, fg_color=COLORI["card"], corner_radius=12)
-        cc.grid(row=0, column=0, padx=(0, 8), pady=0, sticky="nsew")
-        cc.grid_columnconfigure(0, weight=1)
-        cc.grid_rowconfigure(2, weight=1)
-
-        # Header camera
-        hdr = ctk.CTkFrame(cc, fg_color="transparent")
-        hdr.grid(row=0, column=0, padx=16, pady=(14, 4), sticky="ew")
-        hdr.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(hdr, text="📸  Acquisizione Webcam",
-                     font=FONT_SEZ).grid(row=0, column=0, sticky="w")
-
-        # Selettore device
-        self._combo_device = ctk.CTkComboBox(
-            hdr, values=["— nessuna camera —"],
-            font=FONT_SML, width=180, height=30, state="readonly")
-        self._combo_device.grid(row=0, column=1, padx=(12, 0), sticky="e")
-
-        ctk.CTkButton(hdr, text="🔄", width=32, height=30,
-                      font=FONT_SML, fg_color=COLORI["accent"],
-                      command=self._ricarica_dispositivi).grid(
-            row=0, column=2, padx=(4, 0))
-
-        # Pulsanti avvia/ferma
-        ctrl = ctk.CTkFrame(cc, fg_color="transparent")
-        ctrl.grid(row=1, column=0, padx=16, pady=(4, 8), sticky="ew")
-
-        self._btn_avvia = ctk.CTkButton(
-            ctrl, text="▶  Avvia Camera",
-            font=FONT_NRM, height=36, width=160,
-            fg_color=COLORI["verde"], hover_color="#388e3c",
-            command=self._avvia_camera)
-        self._btn_avvia.pack(side="left", padx=(0, 8))
-
-        self._btn_ferma = ctk.CTkButton(
-            ctrl, text="⏹  Ferma",
-            font=FONT_NRM, height=36, width=100,
-            fg_color=COLORI["rosso"], hover_color="#c62828",
-            state="disabled",
-            command=self._ferma_camera)
-        self._btn_ferma.pack(side="left", padx=(0, 16))
-
-        self._lbl_stato_cam = ctk.CTkLabel(
-            ctrl, text="Camera non avviata",
-            font=FONT_SML, text_color=COLORI["grigio"])
-        self._lbl_stato_cam.pack(side="left")
-
-        # Canvas preview
+        # Area video
         self._canvas = tk.Canvas(
-            cc,
-            width=PREVIEW_W, height=PREVIEW_H,
-            bg=COLORI["preview_bg"],
-            highlightthickness=2,
-            highlightbackground=COLORI["accent"],
+            self,
+            bg="#080c18",
+            highlightthickness=0,
         )
-        self._canvas.grid(row=2, column=0, padx=16, pady=(0, 12), sticky="nsew")
-        self._canvas.bind("<Configure>", lambda e: self._aggiorna_canvas_placeholder())
-        # Hotkey SPAZIO → scatta
-        self._canvas.bind("<space>", lambda e: self._scatta())
-        self._canvas.focus_set()
+        self._canvas.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
 
-        self._aggiorna_canvas_placeholder()
+        # Label di stato (nessuna cam disponibile / switching)
+        self._status_label = ctk.CTkLabel(
+            self._canvas,
+            text="",
+            text_color="#4060a0",
+            font=ctk.CTkFont("Segoe UI", 13),
+            fg_color="transparent",
+        )
+        self._status_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Pulsante scatta (grande, sotto il canvas)
+        # Barra pulsanti inferiore
+        btn_bar = ctk.CTkFrame(self, fg_color="#080c18", corner_radius=0, height=58)
+        btn_bar.grid(row=1, column=0, sticky="ew")
+        btn_bar.grid_propagate(False)
+        btn_bar.grid_columnconfigure((0, 1, 2), weight=1)
+
         self._btn_scatta = ctk.CTkButton(
-            cc,
-            text="📷  SCATTA  (Spazio)",
-            font=("Segoe UI", 14, "bold"),
-            height=50,
-            fg_color=COLORI["accent_br"],
-            hover_color="#c73652",
-            state="disabled",
+            btn_bar,
+            text="📸  Scatta",
             command=self._scatta,
+            fg_color="#0f3460",
+            hover_color="#1a4a80",
+            text_color="white",
+            font=ctk.CTkFont("Segoe UI", 13, weight="bold"),
+            corner_radius=8,
+            height=38,
         )
-        self._btn_scatta.grid(row=3, column=0, padx=16, pady=(0, 16), sticky="ew")
+        self._btn_scatta.grid(row=0, column=0, padx=(12, 6), pady=10, sticky="ew")
 
-        # ── Colonna destra: tag + salvataggio ─────────────────────────
-        tc = ctk.CTkFrame(self, fg_color=COLORI["card"], corner_radius=12)
-        tc.grid(row=0, column=1, padx=(8, 0), pady=0, sticky="nsew")
-        tc.grid_columnconfigure(0, weight=1)
-        tc.grid_rowconfigure(3, weight=1)
-
-        ctk.CTkLabel(tc, text="1 · Paziente",
-                     font=FONT_SEZ).grid(row=0, column=0, padx=16, pady=(16, 6), sticky="w")
-
-        self._cerca_paz = ctk.CTkEntry(tc, placeholder_text="🔍 Filtra…",
-                                        font=FONT_NRM, height=32)
-        self._cerca_paz.grid(row=1, column=0, padx=16, pady=(0, 6), sticky="ew")
-        self._cerca_paz.bind("<KeyRelease>", lambda e: self._ricarica_pazienti())
-
-        self._lista_paz = ctk.CTkScrollableFrame(tc, fg_color="transparent", height=200)
-        self._lista_paz.grid(row=2, column=0, padx=8, pady=(0, 4), sticky="ew")
-        self._lista_paz.grid_columnconfigure(0, weight=1)
-
-        self._lbl_paz = ctk.CTkLabel(tc, text="Nessun paziente",
-                                      font=FONT_SML,
-                                      text_color=COLORI["grigio"])
-        self._lbl_paz.grid(row=3, column=0, padx=16, pady=(0, 6))
-
-        ctk.CTkLabel(tc, text="2 · Tag Clinici",
-                     font=FONT_SEZ).grid(row=4, column=0, padx=16, pady=(8, 4), sticky="w")
-
-        # Dente
-        ctk.CTkLabel(tc, text="Dente (FDI)", font=FONT_MICRO,
-                     text_color=COLORI["grigio"]).grid(
-            row=5, column=0, padx=16, pady=(0, 2), sticky="w")
-        self._c_dente = ctk.CTkComboBox(tc, values=db.DENTI_FDI,
-                                         font=FONT_NRM, height=32, state="readonly")
-        self._c_dente.set(db.DENTI_FDI[0])
-        self._c_dente.grid(row=6, column=0, padx=16, pady=(0, 8), sticky="ew")
-
-        # Branca
-        ctk.CTkLabel(tc, text="Branca", font=FONT_MICRO,
-                     text_color=COLORI["grigio"]).grid(
-            row=7, column=0, padx=16, pady=(0, 2), sticky="w")
-        self._c_branca = ctk.CTkComboBox(tc, values=db.BRANCHE,
-                                          font=FONT_NRM, height=32, state="readonly")
-        self._c_branca.set(db.BRANCHE[0])
-        self._c_branca.grid(row=8, column=0, padx=16, pady=(0, 8), sticky="ew")
-
-        # Fase
-        ctk.CTkLabel(tc, text="Fase", font=FONT_MICRO,
-                     text_color=COLORI["grigio"]).grid(
-            row=9, column=0, padx=16, pady=(0, 2), sticky="w")
-        self._c_fase = ctk.CTkComboBox(tc, values=db.FASI,
-                                        font=FONT_NRM, height=32, state="readonly")
-        self._c_fase.set(db.FASI[0])
-        self._c_fase.grid(row=10, column=0, padx=16, pady=(0, 8), sticky="ew")
-
-        # Note
-        ctk.CTkLabel(tc, text="Note", font=FONT_MICRO,
-                     text_color=COLORI["grigio"]).grid(
-            row=11, column=0, padx=16, pady=(0, 2), sticky="w")
-        self._txt_note = ctk.CTkTextbox(tc, font=FONT_NRM, height=60,
-                                         fg_color=COLORI["entry_bg"])
-        self._txt_note.grid(row=12, column=0, padx=16, pady=(0, 12), sticky="ew")
-
-        # Pulsante salva scatto
-        self._btn_salva = ctk.CTkButton(
-            tc,
-            text="💾  Salva Foto",
-            font=("Segoe UI", 13, "bold"), height=46,
-            fg_color=COLORI["verde"], hover_color="#388e3c",
-            state="disabled",
-            command=self._salva_scatto,
+        self._btn_cambia = ctk.CTkButton(
+            btn_bar,
+            text="🔄  Cambia Fotocamera",
+            command=self._cambia_cam,
+            fg_color="#162040",
+            hover_color="#1e3060",
+            text_color="#80b0d8",
+            font=ctk.CTkFont("Segoe UI", 12),
+            corner_radius=8,
+            height=38,
         )
-        self._btn_salva.grid(row=13, column=0, padx=16, pady=(0, 8), sticky="ew")
+        self._btn_cambia.grid(row=0, column=1, padx=6, pady=10, sticky="ew")
 
-        # Annulla scatto
-        self._btn_annulla = ctk.CTkButton(
-            tc, text="↩  Riprendi Stream",
-            font=FONT_SML, height=34,
-            fg_color="transparent", border_width=1,
-            state="disabled",
-            command=self._riprendi_stream,
+        self._lbl_cam = ctk.CTkLabel(
+            btn_bar,
+            text="CAM 0",
+            text_color="#304060",
+            font=ctk.CTkFont("Segoe UI", 10),
         )
-        self._btn_annulla.grid(row=14, column=0, padx=16, pady=(0, 16), sticky="ew")
+        self._lbl_cam.grid(row=0, column=2, padx=(0, 12), pady=10, sticky="e")
 
-        self._lbl_esito = ctk.CTkLabel(tc, text="", font=FONT_SML,
-                                        text_color=COLORI["verde"])
-        self._lbl_esito.grid(row=15, column=0, pady=(0, 8))
+        # Bind resize canvas
+        self._canvas.bind("<Configure>", self._on_canvas_resize)
 
-    # ------------------------------------------------------------------
-    # Placeholder canvas
-    # ------------------------------------------------------------------
-
-    def _aggiorna_canvas_placeholder(self):
-        if not self._live and not self._frozen:
-            self._canvas.delete("all")
-            w = self._canvas.winfo_width() or PREVIEW_W
-            h = self._canvas.winfo_height() or PREVIEW_H
-            self._canvas.create_text(
-                w // 2, h // 2,
-                text="📷\nAvvia la camera per visualizzare\nl'anteprima live",
-                fill=COLORI["grigio"],
-                font=("Segoe UI", 13),
-                justify="center",
-            )
-
-    # ------------------------------------------------------------------
-    # Gestione dispositivi
-    # ------------------------------------------------------------------
-
-    def _ricarica_dispositivi(self):
-        if not CV2_OK:
-            self._combo_device.configure(values=["cv2 non installato"])
-            self._combo_device.set("cv2 non installato")
-            return
-
-        dispositivi = _scan_dispositivi()
-        if dispositivi:
-            etichette = [d[1] for d in dispositivi]
-            self._combo_device.configure(values=etichette)
-            self._combo_device.set(etichette[0])
-            self._btn_avvia.configure(state="normal")
-        else:
-            self._combo_device.configure(values=["Nessuna camera trovata"])
-            self._combo_device.set("Nessuna camera trovata")
-            self._btn_avvia.configure(state="disabled")
-
-    def _device_selezionato_indice(self) -> int:
-        """Ricava l'indice numerico del device dal testo del combo (es. 'Camera 2' → 2)."""
-        testo = self._combo_device.get()
-        try:
-            return int(testo.split()[-1])
-        except (ValueError, IndexError):
-            return 0
-
-    # ------------------------------------------------------------------
-    # Controllo camera
-    # ------------------------------------------------------------------
-
-    def _avvia_camera(self):
-        if not CV2_OK:
-            self._lbl_stato_cam.configure(
-                text="⚠ opencv non installato (pip install opencv-python-headless)",
-                text_color=COLORI["rosso"]
-            )
-            return
-
-        idx = self._device_selezionato_indice()
-        self._cap = cv2.VideoCapture(idx)
-        if not self._cap.isOpened():
-            messagebox.showerror("Errore", f"Impossibile aprire camera {idx}.",
-                                  parent=self)
-            self._cap = None
-            return
-
-        # Imposta risoluzione
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-        self._live    = True
-        self._frozen  = False
-        self._canvas.configure(highlightbackground=COLORI["verde"])
-        self._btn_avvia.configure(state="disabled")
-        self._btn_ferma.configure(state="normal")
-        self._btn_scatta.configure(state="normal")
-        self._lbl_stato_cam.configure(text="🔴  Live", text_color=COLORI["accent_br"])
-
-        # Thread di acquisizione frame
-        self._stream_thread = threading.Thread(target=self._loop_stream, daemon=True)
-        self._stream_thread.start()
-
-    def _ferma_camera(self):
-        self._live   = False
-        self._frozen = False
-        if self._cap:
+    # ---------------------------------------------------- Camera control --
+    def _start_camera(self, index: int):
+        self._stop_loop()
+        if self._cap is not None:
             self._cap.release()
             self._cap = None
-        self._canvas.configure(highlightbackground=COLORI["accent"])
-        self._btn_avvia.configure(state="normal")
-        self._btn_ferma.configure(state="disabled")
-        self._btn_scatta.configure(state="disabled")
-        self._btn_salva.configure(state="disabled")
-        self._btn_annulla.configure(state="disabled")
-        self._lbl_stato_cam.configure(text="Camera ferma", text_color=COLORI["grigio"])
-        self.after(50, self._aggiorna_canvas_placeholder)
 
-    # ------------------------------------------------------------------
-    # Loop acquisizione frame (thread)
-    # ------------------------------------------------------------------
+        cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+        if cap is None or not cap.isOpened():
+            self._show_status(f"⚠  Fotocamera {index} non disponibile")
+            return
 
-    def _loop_stream(self):
-        """Legge i frame dalla camera e li invia al canvas via after()."""
-        while self._live and self._cap and not self._frozen:
-            ret, frame = self._cap.read()
-            if not ret:
-                break
-            self._frame_corrente = frame
+        self._cap = cap
+        self._cam_index = index
+        self._running = True
+        self._lbl_cam.configure(text=f"CAM {index}")
+        self._show_status("")
+        self._loop()
+
+    def _stop_loop(self):
+        self._running = False
+        if self._after_id is not None:
             try:
-                if self.winfo_exists():
-                    aid = self.after(0, self._mostra_frame, frame)
-                    self._after_ids.append(aid)
+                self.after_cancel(self._after_id)
             except Exception:
-                break
-            time.sleep(1 / 30)   # ~30 fps
+                pass
+            self._after_id = None
 
-    def _mostra_frame(self, frame_bgr):
-        """Converte frame BGR → RGB → resize → PhotoImage → Canvas."""
-        if self._frozen:
-            return
-        try:
-            if not self.winfo_exists():
+    def _cambia_cam(self):
+        for step in range(1, self._max_cam_index + 2):
+            next_idx = (self._cam_index + step) % (self._max_cam_index + 1)
+            cap = cv2.VideoCapture(next_idx, cv2.CAP_ANY)
+            if cap and cap.isOpened():
+                cap.release()
+                self._start_camera(next_idx)
                 return
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb)
-            cw = self._canvas.winfo_width()
-            ch = self._canvas.winfo_height()
-            if cw > 10 and ch > 10:
-                pil.thumbnail((cw, ch), Image.NEAREST)
-            self._tk_img = ImageTk.PhotoImage(pil)
-            self._canvas.delete("all")
-            self._canvas.create_image(
-                cw // 2, ch // 2, image=self._tk_img, anchor="center")
-        except Exception:
-            pass
+        self._show_status("⚠  Nessuna altra fotocamera trovata")
 
-    # ------------------------------------------------------------------
-    # Scatto e conferma
-    # ------------------------------------------------------------------
-
-    def _scatta(self):
-        """Congela il frame corrente e attiva i controlli di salvataggio."""
-        if not self._live or self._frame_corrente is None:
+    # -------------------------------------------------------- Frame loop --
+    def _loop(self):
+        if not self._running or self._cap is None:
             return
 
-        self._live   = False    # blocca il loop
-        self._frozen = True
-        self._frame_freeze = self._frame_corrente.copy()
+        ret, frame = self._cap.read()
+        if ret and frame is not None:
+            with self._frame_lock:
+                self._last_frame = frame.copy()
+            self._display_frame(frame)
 
-        # Mostra l'ultimo frame congelato con bordo rosso
-        rgb = cv2.cvtColor(self._frame_freeze, cv2.COLOR_BGR2RGB)
-        pil = Image.fromarray(rgb)
+        self._after_id = self.after(self._frame_delay_ms, self._loop)
+
+    def _display_frame(self, frame):
         cw = self._canvas.winfo_width()
         ch = self._canvas.winfo_height()
-        if cw > 10 and ch > 10:
-            pil.thumbnail((cw, ch), Image.LANCZOS)
-
-        self._tk_img = ImageTk.PhotoImage(pil)
-        self._canvas.delete("all")
-        self._canvas.create_image(cw // 2, ch // 2, image=self._tk_img, anchor="center")
-
-        # Indicatore "SCATTATA"
-        self._canvas.create_rectangle(0, 0, cw, 36, fill="#000000", stipple="gray50",
-                                       outline="")
-        self._canvas.create_text(cw // 2, 18, text="📷  FOTO SCATTATA — Salva o riprendi",
-                                  fill=COLORI["accent_br"], font=("Segoe UI", 11, "bold"))
-        self._canvas.configure(highlightbackground=COLORI["freeze_border"])
-
-        self._btn_scatta.configure(state="disabled")
-        self._btn_salva.configure(state="normal")
-        self._btn_annulla.configure(state="normal")
-        self._lbl_stato_cam.configure(text="⏸  Foto congelata", text_color=COLORI["arancio"])
-
-    def _riprendi_stream(self):
-        """Riavvia il live stream dopo uno scatto non salvato."""
-        self._frozen = False
-        self._frame_freeze = None
-        self._live = True
-        self._canvas.configure(highlightbackground=COLORI["verde"])
-        self._btn_scatta.configure(state="normal")
-        self._btn_salva.configure(state="disabled")
-        self._btn_annulla.configure(state="disabled")
-        self._lbl_stato_cam.configure(text="🔴  Live", text_color=COLORI["accent_br"])
-        self._stream_thread = threading.Thread(target=self._loop_stream, daemon=True)
-        self._stream_thread.start()
-
-    # ------------------------------------------------------------------
-    # Salvataggio
-    # ------------------------------------------------------------------
-
-    def _salva_scatto(self):
-        """Salva il frame congelato come JPEG in images_storage via db.upload_foto()."""
-        if self._frame_freeze is None:
-            return
-        if self._paz_id is None:
-            messagebox.showwarning("Paziente mancante", "Seleziona un paziente.",
-                                    parent=self)
+        if cw < 2 or ch < 2:
             return
 
-        # Salva il frame in un file temporaneo JPEG
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        h, w = frame.shape[:2]
+        scale = min(cw / w, ch / h)
+        nw, nh = int(w * scale), int(h * scale)
 
-        rgb  = cv2.cvtColor(self._frame_freeze, cv2.COLOR_BGR2RGB)
-        pil  = Image.fromarray(rgb)
-        pil.save(tmp_path, format="JPEG", quality=90)
+        resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+        self._tk_img = ImageTk.PhotoImage(pil_img)
 
-        try:
-            fid = db.upload_foto(
-                paziente_id=self._paz_id,
-                sorgente_path=tmp_path,
-                data_scatto=date.today(),
-                dente=self._c_dente.get(),
-                branca=self._c_branca.get(),
-                fase=self._c_fase.get(),
-                note=self._txt_note.get("1.0", "end").strip(),
-            )
-            self._lbl_esito.configure(
-                text=f"✅  Foto salvata  (ID {fid})",
-                text_color=COLORI["verde"],
-            )
-            self._txt_note.delete("1.0", "end")
-            # Riprende automaticamente dopo il salvataggio
-            self._riprendi_stream()
-        except Exception as exc:
-            self._lbl_esito.configure(
-                text=f"❌  {exc}", text_color=COLORI["rosso"])
-        finally:
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+        self._canvas.delete("frame")
+        cx = cw // 2
+        cy = ch // 2
+        self._canvas.create_image(cx, cy, image=self._tk_img, anchor="center", tags="frame")
 
-    # ------------------------------------------------------------------
-    # Lista pazienti
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------- Scatto --
+    def _scatta(self):
+        with self._frame_lock:
+            frame = self._last_frame.copy() if self._last_frame is not None else None
 
-    def _ricarica_pazienti(self, *_):
-        righe = db.cerca_pazienti(self._cerca_paz.get())
-        for w in self._lista_paz.winfo_children():
-            w.destroy()
-        for i, r in enumerate(righe):
-            sel = (r["id"] == self._paz_id)
-            ctk.CTkButton(
-                self._lista_paz,
-                text=f"{r['cognome']} {r['nome']}",
-                font=FONT_SML, height=28,
-                fg_color=COLORI["accent"] if sel else COLORI["entry_bg"],
-                anchor="w",
-                command=lambda rid=r["id"], rn=f"{r['cognome']} {r['nome']}":
-                    self._set_paz(rid, rn),
-            ).grid(row=i, column=0, padx=4, pady=2, sticky="ew")
+        if frame is None:
+            return
 
-    def _set_paz(self, pid: int, nome: str):
-        self._paz_id = pid
-        self._lbl_paz.configure(text=f"✅ {nome}", text_color=COLORI["verde"])
-        self._ricarica_pazienti()
+        save_dir = os.path.join(os.path.expanduser("~"), "DentalCaptures")
+        os.makedirs(save_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = os.path.join(save_dir, f"scatto_{ts}.jpg")
+        cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
-    def imposta_paziente(self, pid: int):
-        """API pubblica per pre-selezionare un paziente."""
-        r = db.get_paziente_by_id(pid)
-        if r:
-            self._set_paz(pid, f"{r['cognome']} {r['nome']}")
+        self._flash_effect()
 
-    # ------------------------------------------------------------------
-    # Cleanup alla distruzione del frame
-    # ------------------------------------------------------------------
+        if callable(self.on_scatto):
+            self.after(50, lambda: self.on_scatto(path))
 
+    def _flash_effect(self):
+        """Breve flash bianco sul canvas per feedback visivo."""
+        self._canvas.create_rectangle(
+            0, 0, self._canvas.winfo_width(), self._canvas.winfo_height(),
+            fill="white", outline="", tags="flash",
+        )
+        self.after(80, lambda: self._canvas.delete("flash"))
+
+    # ---------------------------------------------------------- Helpers --
+    def _show_status(self, msg: str):
+        self._status_label.configure(text=msg)
+
+    def _on_canvas_resize(self, event):
+        # Il prossimo frame ridisegnerà automaticamente
+        pass
+
+    # --------------------------------------------------- Cleanup on destroy --
     def destroy(self):
-        self._live = False
-        for aid in self._after_ids:
-            try:
-                self.after_cancel(aid)
-            except Exception:
-                pass
-        self._after_ids.clear()
-        if self._cap:
+        self._stop_loop()
+        if self._cap is not None:
             self._cap.release()
             self._cap = None
         super().destroy()

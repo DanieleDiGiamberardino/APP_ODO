@@ -846,304 +846,278 @@ class PazientiFrame(ctk.CTkFrame):
 # FRAME: UPLOAD
 # ===========================================================================
 
+# ===========================================================================
+# FRAME: UPLOAD
+# ===========================================================================
+
 class UploadFrame(ctk.CTkFrame):
+    # ── palette ───────────────────────────────────────────────────────────────
+    C_BG        = "#080c18"
+    C_PANEL     = "#0f1629"
+    C_ACCENT    = "#0f3460"
+    C_ACCENT_HO = "#1a4a80"
+    C_BORDER    = "#1a2a4a"
+    C_TEXT      = "#c0d4f0"
+    C_MUTED     = "#4a6080"
+    C_SUCCESS   = "#22c55e"
+    C_DANGER    = "#e74c3c"
+
+    # ── tag options ───────────────────────────────────────────────────────────
+    DENTI  = [str(n) for n in range(11, 49) if n % 10 != 0 and n % 10 <= 8]
+    BRANCHE = db.BRANCHE
+    FASI   = db.FASI
+
     def __init__(self, master, paz_id_init=None, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
-        self._paz_id: Optional[int] = paz_id_init
-        self._file: Optional[Path] = None
-        self._prev_img = None
-        self._build_ui()
-        self._ricarica_pazienti()
+        kwargs.setdefault("fg_color", self.C_BG)
+        kwargs.setdefault("corner_radius", 0)
+        super().__init__(master, **kwargs)
 
-    def _build_ui(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=2)
+        self._paziente_id:   int | None  = paz_id_init
+        self._paziente_info: dict        = {}
+        self._file_path:     Path | None = None
+        self._pil_img:       Image.Image | None = None
+        self._prev_img:      ImageTk.PhotoImage | None = None   
+
+        self._tag_dente  = tk.StringVar(value="")
+        self._tag_branca = tk.StringVar(value="")
+        self._tag_fase   = tk.StringVar(value="")
+        self._note_text  = tk.StringVar(value="")
+
+        self._build_layout()
+        if paz_id_init:
+            self.imposta_paziente(paz_id_init)
+
+    def _build_layout(self):
+        self.grid_columnconfigure(0, weight=3, minsize=280)
+        self.grid_columnconfigure(1, weight=5)
         self.grid_rowconfigure(0, weight=1)
+        self._build_left_panel()
+        self._build_right_panel()
 
-        # ── Colonna sinistra: selezione paziente ─────────────────────
-        pc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
-        pc.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
-        pc.grid_columnconfigure(0, weight=1)
-        pc.grid_rowconfigure(2, weight=1)
+    def _build_left_panel(self):
+        left = ctk.CTkFrame(self, fg_color=self.C_PANEL, corner_radius=12)
+        left.grid(row=0, column=0, sticky="nsew", padx=(14, 6), pady=14)
+        left.grid_rowconfigure(2, weight=1)
+        left.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(pc, text="1 · Paziente", font=FONT_SEZIONE).grid(
-            row=0, column=0, padx=20, pady=(20, 8), sticky="w")
-        self._cerca = ctk.CTkEntry(pc, placeholder_text="🔍", font=FONT_NORMALE, height=32)
-        self._cerca.grid(row=1, column=0, padx=20, pady=(0, 6), sticky="ew")
-        self._cerca.bind("<KeyRelease>", lambda e: self._ricarica_pazienti())
-        self._lista = ctk.CTkScrollableFrame(pc, fg_color="transparent")
-        self._lista.grid(row=2, column=0, padx=8, pady=(0, 8), sticky="nsew")
-        self._lista.grid_columnconfigure(0, weight=1)
-        self._lbl_sel = ctk.CTkLabel(pc, text="Nessun paziente", font=FONT_PICCOLO,
-                                      text_color=COLORI["testo_grigio"])
-        self._lbl_sel.grid(row=3, column=0, padx=20, pady=(0, 16))
+        ctk.CTkLabel(left, text="👤  Paziente", font=ctk.CTkFont("Segoe UI", 14, weight="bold"), text_color=self.C_TEXT, anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 6))
 
-        # ── Colonna destra: carica & tagga ───────────────────────────
-        uc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
-        uc.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
-        uc.grid_columnconfigure(0, weight=1)
-        uc.grid_columnconfigure(1, weight=1)
+        search_row = ctk.CTkFrame(left, fg_color="transparent")
+        search_row.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        search_row.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(uc, text="2 · Carica & Tagga", font=FONT_SEZIONE).grid(
-            row=0, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
+        self._search_entry = ctk.CTkEntry(search_row, placeholder_text="🔍  Cerca nome, cognome o ID…", fg_color="#0a1428", border_color=self.C_BORDER, text_color=self.C_TEXT, font=ctk.CTkFont("Segoe UI", 12), height=36)
+        self._search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._search_entry.bind("<KeyRelease>", self._on_search)
 
-        # ── Zona Drop ────────────────────────────────────────────────
-        self._drop_zone = ctk.CTkLabel(
-            uc,
-            text="",
-            width=320, height=180,
-            fg_color=COLORI["sfondo_entry"],
-            corner_radius=12,
-        )
-        self._drop_zone.grid(row=1, column=0, columnspan=2,
-                              padx=20, pady=(8, 0), sticky="ew")
-        self._drop_zone.bind("<Button-1>", lambda e: self._scegli())
+        ctk.CTkButton(search_row, text="↺", width=34, height=36, fg_color=self.C_BORDER, hover_color=self.C_ACCENT, text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 14), command=self._reset_search).grid(row=0, column=1)
 
-        # Canvas interno per testo + icona centrati
-        self._drop_canvas = tk.Canvas(
-            self._drop_zone,
-            bg=COLORI["sfondo_entry"],
-            highlightthickness=0,
-            cursor="hand2",
-        )
-        self._drop_canvas.place(relwidth=1, relheight=1)
-        self._drop_canvas.bind("<Button-1>", lambda e: self._scegli())
-        self._drop_canvas.bind("<Configure>", lambda e: self._aggiorna_drop_placeholder())
-        self._aggiorna_drop_placeholder()
+        self._results_scroll = ctk.CTkScrollableFrame(left, fg_color="#0a1020", scrollbar_button_color=self.C_ACCENT, scrollbar_button_hover_color=self.C_ACCENT_HO, corner_radius=8)
+        self._results_scroll.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self._results_scroll.grid_columnconfigure(0, weight=1)
 
-        # Attiva Drag & Drop se tkinterdnd2 è disponibile
-        self._dnd_attivo = False
+        self._sel_frame = ctk.CTkFrame(left, fg_color="#0a1428", corner_radius=8)
+        self._sel_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 14))
+        self._sel_frame.grid_columnconfigure(0, weight=1)
+
+        self._sel_label = ctk.CTkLabel(self._sel_frame, text="Nessun paziente selezionato", text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 11), anchor="w", wraplength=220)
+        self._sel_label.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+
+    def _build_right_panel(self):
+        right = ctk.CTkFrame(self, fg_color=self.C_PANEL, corner_radius=12)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 14), pady=14)
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(right, text="📁  Carica Immagine", font=ctk.CTkFont("Segoe UI", 14, weight="bold"), text_color=self.C_TEXT, anchor="w").grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 6))
+
+        self._drop_canvas = tk.Canvas(right, bg="#08101e", highlightthickness=2, highlightbackground=self.C_BORDER, cursor="hand2")
+        self._drop_canvas.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 8))
+        self._draw_drop_hint()
+
         if _DND_OK:
-            try:
-                self._drop_zone.drop_target_register(DND_FILES)
-                self._drop_zone.dnd_bind("<<Drop>>",    self._on_drop)
-                self._drop_zone.dnd_bind("<<DragEnter>>", self._on_drag_enter)
-                self._drop_zone.dnd_bind("<<DragLeave>>", self._on_drag_leave)
-                self._drop_canvas.drop_target_register(DND_FILES)
-                self._drop_canvas.dnd_bind("<<Drop>>",    self._on_drop)
-                self._drop_canvas.dnd_bind("<<DragEnter>>", self._on_drag_enter)
-                self._drop_canvas.dnd_bind("<<DragLeave>>", self._on_drag_leave)
-                self._dnd_attivo = True
-            except Exception:
-                pass
+            self._drop_canvas.drop_target_register(DND_FILES)
+            self._drop_canvas.dnd_bind("<<Drop>>", self._on_drop)
 
-        # Pulsante sfoglia alternativo
-        ctk.CTkButton(uc, text="📂  Sfoglia…", font=FONT_NORMALE, height=32,
-                      fg_color="transparent", border_width=1,
-                      border_color=COLORI["sidebar_border"],
-                      command=self._scegli).grid(
-            row=2, column=0, columnspan=2, padx=20, pady=(6, 14), sticky="ew")
+        self._drop_canvas.bind("<Button-1>", self._on_canvas_click)
+        self._drop_canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # ── Tag clinici ───────────────────────────────────────────────
-        self._c_dente  = self._combo_row(uc, "Dente (FDI)", db.DENTI_FDI, 3, 0)
-        self._c_branca = self._combo_row(uc, "Branca",      db.BRANCHE,   3, 1)
-        self._c_fase   = self._combo_row(uc, "Fase",        db.FASI,      5, 0)
+        self._build_tag_row(right)
+        self._build_note_row(right)
 
-        ctk.CTkLabel(uc, text="Data", font=FONT_PICCOLO,
-                     text_color=COLORI["testo_grigio"]).grid(
-            row=5, column=1, padx=(6, 20), pady=(0, 2), sticky="w")
-        self._data = ctk.CTkEntry(uc, font=FONT_NORMALE, height=34)
-        self._data.insert(0, date.today().isoformat())
-        self._data.grid(row=6, column=1, padx=(6, 20), pady=(0, 10), sticky="ew")
+        self._btn_save = ctk.CTkButton(right, text="💾  Salva nel Database", height=42, fg_color=self.C_ACCENT, hover_color=self.C_ACCENT_HO, text_color="white", font=ctk.CTkFont("Segoe UI", 13, weight="bold"), corner_radius=9, state="disabled", command=self._salva)
+        self._btn_save.grid(row=4, column=0, sticky="ew", padx=14, pady=(4, 14))
 
-        ctk.CTkLabel(uc, text="Note", font=FONT_PICCOLO,
-                     text_color=COLORI["testo_grigio"]).grid(
-            row=7, column=0, columnspan=2, padx=20, pady=(0, 2), sticky="w")
-        self._note = ctk.CTkTextbox(uc, font=FONT_NORMALE, height=60)
-        self._note.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
+    def _build_tag_row(self, parent):
+        tag_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        tag_frame.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 4))
+        tag_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._btn_up = ctk.CTkButton(uc, text="⬆️  Carica",
-                                      font=("Segoe UI", 13, "bold"), height=44,
-                                      fg_color=COLORI["accent_bright"],
-                                      hover_color="#c73652",
-                                      command=self._carica)
-        self._btn_up.grid(row=9, column=0, columnspan=2,
-                          padx=20, pady=(0, 12), sticky="ew")
+        _opt_cfg = dict(fg_color="#0a1428", button_color=self.C_ACCENT, button_hover_color=self.C_ACCENT_HO, dropdown_fg_color=self.C_PANEL, dropdown_hover_color=self.C_ACCENT, text_color=self.C_TEXT, dropdown_text_color=self.C_TEXT, font=ctk.CTkFont("Segoe UI", 12), height=34, corner_radius=7)
 
-        self._stato = ctk.CTkLabel(uc, text="", font=FONT_PICCOLO,
-                                    text_color=COLORI["verde_ok"])
-        self._stato.grid(row=10, column=0, columnspan=2, pady=(0, 10))
+        for col, (lbl, var, vals) in enumerate([("🦷 Dente", self._tag_dente, self.DENTI), ("🔬 Branca", self._tag_branca, self.BRANCHE), ("📋 Fase", self._tag_fase, self.FASI)]):
+            cell = ctk.CTkFrame(tag_frame, fg_color="transparent")
+            cell.grid(row=0, column=col, sticky="ew", padx=4)
+            cell.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(cell, text=lbl, text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 10), anchor="w").grid(row=0, column=0, sticky="w")
+            ctk.CTkOptionMenu(cell, variable=var, values=["—"] + vals, **_opt_cfg).grid(row=1, column=0, sticky="ew")
 
-    # ------------------------------------------------------------------
-    # Drop zone helpers
-    # ------------------------------------------------------------------
+    def _build_note_row(self, parent):
+        note_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        note_frame.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 4))
+        note_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(note_frame, text="📝 Note", text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 10), anchor="w").grid(row=0, column=0, sticky="w")
+        self._note_entry = ctk.CTkEntry(note_frame, textvariable=self._note_text, fg_color="#0a1428", border_color=self.C_BORDER, text_color=self.C_TEXT, font=ctk.CTkFont("Segoe UI", 12), height=34, placeholder_text="Annotazioni cliniche opzionali…")
+        self._note_entry.grid(row=1, column=0, sticky="ew")
 
-    _FORMATI_OK = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+    def _on_search(self, event=None):
+        q = self._search_entry.get().strip()
+        for w in self._results_scroll.winfo_children(): w.destroy()
+        if not q: return
+        try: rows = db.cerca_pazienti(q)
+        except Exception: rows = []
+        if not rows:
+            ctk.CTkLabel(self._results_scroll, text="Nessun risultato.", text_color=self.C_MUTED, font=ctk.CTkFont("Segoe UI", 11)).grid(row=0, column=0, pady=14)
+            return
+        for i, paz in enumerate(rows):
+            self._add_result_row(i, paz)
 
-    def _aggiorna_drop_placeholder(self, evidenzia=False):
-        """Ridisegna il contenuto della drop zone (testo + bordo tratteggiato)."""
-        try:
-            c = self._drop_canvas
-            c.delete("all")
-            w = c.winfo_width()  or 320
-            h = c.winfo_height() or 180
+    def _add_result_row(self, idx: int, paz: dict):
+        pid  = paz.get("id", "—")
+        nome = paz.get("nome", "")
+        cogn = paz.get("cognome", "")
+        dn   = paz.get("data_nascita", "")
+        row = ctk.CTkFrame(self._results_scroll, fg_color="#111e38", corner_radius=6, height=38)
+        row.grid(row=idx, column=0, sticky="ew", padx=2, pady=2)
+        row.grid_propagate(False)
+        row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(row, text=f"{cogn} {nome}  |  ID: {pid}", text_color=self.C_TEXT, font=ctk.CTkFont("Segoe UI", 11), anchor="w").grid(row=0, column=0, sticky="ew", padx=8, pady=0)
+        ctk.CTkButton(row, text="✔", width=30, height=26, fg_color=self.C_ACCENT, hover_color=self.C_ACCENT_HO, text_color="white", font=ctk.CTkFont("Segoe UI", 12, "bold"), command=lambda p=paz: self._select_paziente(p)).grid(row=0, column=1, padx=(0, 6), pady=6)
 
-            border_col = "#2563eb" if evidenzia else "#1e3a5f"
-            bg_col     = "#111827" if evidenzia else COLORI["sfondo_entry"]
-            c.configure(bg=bg_col)
-
-            # Bordo tratteggiato simulato
-            dash = (8, 6)
-            c.create_rectangle(8, 8, w-8, h-8,
-                                outline=border_col, width=2, dash=dash)
-
-            if self._file:
-                try:
-                    from PIL import ImageTk
-                    # Apre l'immagine e la ridimensiona mantenendo le proporzioni
-                    img = Image.open(self._file)
-                    img.thumbnail((w - 20, h - 20), Image.LANCZOS)
-                    
-                    # Salva in self._prev_img per evitare che venga eliminata dal Garbage Collector
-                    self._prev_img = ImageTk.PhotoImage(img)
-                    
-                    # Mostra la preview centrata nel canvas
-                    c.create_image(w//2, h//2, image=self._prev_img, anchor="center")
-                    
-                except Exception:
-                    # Fallback: se l'immagine non è leggibile mostra il nome del file
-                    c.create_text(w//2, h//2 - 12,
-                                  text="✅  " + self._file.name[:40],
-                                  fill="#10b981", font=("Segoe UI", 11, "bold"),
-                                  anchor="center")
-                    c.create_text(w//2, h//2 + 14,
-                                  text="Clicca per cambiare",
-                                  fill=COLORI["testo_grigio"],
-                                  font=("Segoe UI", 9), anchor="center")
-                                  
-            elif evidenzia:
-                c.create_text(w//2, h//2 - 8,
-                              text="📂  Rilascia qui",
-                              fill="#2563eb", font=("Segoe UI", 13, "bold"),
-                              anchor="center")
-            else:
-                c.create_text(w//2, h//2 - 16,
-                              text="⬆",
-                              fill="#334155", font=("Segoe UI", 28),
-                              anchor="center")
-                c.create_text(w//2, h//2 + 12,
-                              text="Trascina un'immagine qui",
-                              fill=COLORI["testo_grigio"],
-                              font=("Segoe UI", 11), anchor="center")
-                dnd_hint = "o clicca per sfogliare"
-                c.create_text(w//2, h//2 + 32,
-                              text=dnd_hint,
-                              fill="#334155",
-                              font=("Segoe UI", 9), anchor="center")
-        except Exception:
-            pass
-
-    def _on_drag_enter(self, event):
-        self._aggiorna_drop_placeholder(evidenzia=True)
-        return event.action
-
-    def _on_drag_leave(self, event):
-        self._aggiorna_drop_placeholder(evidenzia=False)
-
-    def _on_drop(self, event):
-        self._aggiorna_drop_placeholder(evidenzia=False)
-        raw = event.data.strip()
-        # tkinterdnd2 su Windows restituisce path tra {} se contengono spazi
-        if raw.startswith("{") and raw.endswith("}"):
-            raw = raw[1:-1]
-        # Prende il primo file in caso di drop multiplo
-        path = Path(raw.split("} {")[0])
-        self._carica_file(path)
-        return event.action
-
-    def _combo_row(self, parent, lbl, vals, base_row, col):
-        px = (20, 6) if col == 0 else (6, 20)
-        ctk.CTkLabel(parent, text=lbl, font=FONT_PICCOLO,
-                     text_color=COLORI["testo_grigio"]).grid(
-            row=base_row, column=col, padx=px, pady=(0, 2), sticky="w")
-        c = ctk.CTkComboBox(parent, values=vals, font=FONT_NORMALE, height=34, state="readonly")
-        c.set(vals[0])
-        c.grid(row=base_row + 1, column=col, padx=px, pady=(0, 10), sticky="ew")
-        return c
-
-    def _ricarica_pazienti(self, *_):
-        righe = db.cerca_pazienti(self._cerca.get())
-        for w in self._lista.winfo_children():
-            w.destroy()
-        for i, r in enumerate(righe):
-            sel = (r["id"] == self._paz_id)
-            ctk.CTkButton(self._lista, text=f"{r['cognome']} {r['nome']}",
-                          font=FONT_PICCOLO, height=30,
-                          fg_color=COLORI["accent"] if sel else COLORI["sfondo_entry"],
-                          anchor="w",
-                          command=lambda rid=r["id"], rn=f"{r['cognome']} {r['nome']}":
-                              self._set_paz(rid, rn)).grid(
-                row=i, column=0, padx=4, pady=2, sticky="ew")
-
-    def _set_paz(self, pid, nome):
-        self._paz_id = pid
-        self._lbl_sel.configure(text=f"✅ {nome}", text_color=COLORI["verde_ok"])
-        self._ricarica_pazienti()
-
-    def imposta_paziente(self, pid):
+    def _select_paziente(self, paz: dict):
+        self._paziente_id   = paz.get("id")
+        self._paziente_info = paz
+        nome = paz.get("nome", "")
+        cogn = paz.get("cognome", "")
+        pid  = paz.get("id", "—")
+        self._sel_label.configure(text=f"✔  {cogn} {nome}\nID: {pid}", text_color=self.C_SUCCESS)
+        self._update_save_btn()
+        
+    def imposta_paziente(self, pid: int):
         r = db.get_paziente_by_id(pid)
         if r:
-            self._set_paz(pid, f"{r['cognome']} {r['nome']}")
+            self._select_paziente(r)
 
-    def _scegli(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp")])
-        if not path:
+    def _reset_search(self):
+        self._search_entry.delete(0, "end")
+        for w in self._results_scroll.winfo_children(): w.destroy()
+
+    @staticmethod
+    def _clean_drop_path(raw: str) -> Path:
+        cleaned = raw.strip().strip("{}")
+        return Path(cleaned)
+
+    def _on_drop(self, event):
+        path = self._clean_drop_path(event.data)
+        if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}:
+            ToastManager.mostra("Formato non supportato.", "error")
             return
-        self._carica_file(Path(path))
+        self._carica_file(path)
+
+    def _on_canvas_click(self, event=None):
+        from tkinter import filedialog
+        raw = filedialog.askopenfilename(title="Seleziona immagine", filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp")])
+        if raw:
+            self._carica_file(Path(raw))
 
     def _carica_file(self, path: Path):
-        """Carica un file (da dialog o drag & drop) e aggiorna la drop zone."""
-        if path.suffix.lower() not in self._FORMATI_OK:
-            ToastManager.mostra(f"Formato non supportato: {path.suffix}", "error")
-            return
-        if not path.exists():
-            ToastManager.mostra("File non trovato.", "error")
-            return
-        self._file = path
-        self._aggiorna_drop_placeholder()
-        self.after(60, self._aggiorna_drop_placeholder)
-        ToastManager.mostra(f"📂  {path.name}", "info", 2500)
-
-    def _carica(self):
-        if not self._paz_id:
-            ToastManager.mostra("Seleziona un paziente prima di caricare.", "warning")
-            return
-        if not self._file:
-            ToastManager.mostra("Trascina o scegli un'immagine.", "warning")
-            return
         try:
-            ds = date.fromisoformat(self._data.get().strip())
-        except ValueError:
-            ToastManager.mostra("Data non valida — formato: AAAA-MM-GG", "error")
+            img = Image.open(path)
+            img = ImageOps.exif_transpose(img)
+            img = img.convert("RGB")
+        except Exception as exc:
+            ToastManager.mostra(f"Impossibile aprire il file:\n{exc}", "error")
             return
-        self._btn_up.configure(state="disabled", text="⏳…")
+        self._file_path = path
+        self._pil_img   = img
+        self._drop_canvas.configure(highlightbackground=self.C_ACCENT)
+        self._render_preview()   
+        self._update_save_btn()
 
-        def _job():
-            try:
-                fid = db.upload_foto(self._paz_id, self._file, ds,
-                                     self._c_dente.get(), self._c_branca.get(),
-                                     self._c_fase.get(),
-                                     self._note.get("1.0", "end").strip())
-                self.after(0, self._ok, fid)
-            except Exception as e:
-                self.after(0, self._err, str(e))
+    def _on_canvas_configure(self, event=None):
+        if self._pil_img is not None:
+            self._render_preview()
+        else:
+            self._draw_drop_hint()
 
-        threading.Thread(target=_job, daemon=True).start()
+    def _render_preview(self):
+        if self._pil_img is None: return
+        cw = self._drop_canvas.winfo_width()
+        ch = self._drop_canvas.winfo_height()
+        if cw < 4 or ch < 4: return
+        img_w, img_h = self._pil_img.size
+        scale = min(cw / img_w, ch / img_h)
+        new_w = max(1, int(img_w * scale))
+        new_h = max(1, int(img_h * scale))
 
-    def _ok(self, fid):
-        self._btn_up.configure(state="normal", text="⬆️  Carica")
-        self._file = None
-        self._aggiorna_drop_placeholder()
-        self._note.delete("1.0", "end")
-        self._stato.configure(text=f"✅  Foto salvata (ID {fid})",
-                               text_color=COLORI["verde_ok"])
-        ToastManager.mostra(f"✅  Foto caricata con successo (ID {fid})", "success")
+        resized = self._pil_img.resize((new_w, new_h), Image.LANCZOS)
+        self._prev_img = ImageTk.PhotoImage(resized)
+        self._drop_canvas.delete("all")
+        self._drop_canvas.create_image(cw // 2, ch // 2, image=self._prev_img, anchor="center", tags="preview")
 
-    def _err(self, msg):
-        self._btn_up.configure(state="normal", text="⬆️  Carica")
-        self._stato.configure(text=f"❌ {msg}", text_color=COLORI["accent_bright"])
-        ToastManager.mostra(f"Errore upload: {msg}", "error")
+        fname = self._file_path.name if self._file_path else ""
+        if fname:
+            self._drop_canvas.create_rectangle(0, ch - 26, cw, ch, fill="#06101e", outline="", stipple="gray50")
+            self._drop_canvas.create_text(cw // 2, ch - 13, text=fname, fill=self.C_MUTED, font=("Segoe UI", 9))
+
+    def _draw_drop_hint(self):
+        self._drop_canvas.delete("all")
+        cw = self._drop_canvas.winfo_width()  or 300
+        ch = self._drop_canvas.winfo_height() or 200
+        self._drop_canvas.create_rectangle(20, 20, cw - 20, ch - 20, outline=self.C_BORDER, width=2, dash=(6, 4))
+        self._drop_canvas.create_text(cw // 2, ch // 2 - 22, text="⬆", fill=self.C_ACCENT, font=("Segoe UI", 28))
+        self._drop_canvas.create_text(cw // 2, ch // 2 + 16, text="Trascina un'immagine qui\noppure clicca per selezionarla", fill=self.C_MUTED, font=("Segoe UI", 12), justify="center")
+
+    def _update_save_btn(self):
+        ready = (self._paziente_id is not None and self._file_path is not None)
+        self._btn_save.configure(state="normal" if ready else "disabled", text="💾  Salva nel Database" if ready else "Seleziona Paziente e Immagine")
+
+    def _salva(self):
+        if self._paziente_id is None or self._file_path is None: return
+
+        dente  = self._tag_dente.get()
+        branca = self._tag_branca.get()
+        fase   = self._tag_fase.get()
+        note   = self._note_text.get().strip()
+
+        try:
+            # FIX: Utilizziamo la vera funzione del database
+            fid = db.upload_foto(
+                paziente_id=self._paziente_id,
+                sorgente_path=self._file_path,
+                dente=dente if dente not in ("", "—") else "",
+                branca=branca if branca not in ("", "—") else "",
+                fase=fase if fase not in ("", "—") else "",
+                note=note
+            )
+            ToastManager.mostra(f"✔  Immagine caricata con ID {fid}", "success")
+            self._reset_form()
+            # Aggiorna la statusbar
+            self.winfo_toplevel()._aggiorna_statusbar()
+        except Exception as exc:
+            ToastManager.mostra(f"Errore salvataggio:\n{exc}", "error")
+
+    def _reset_form(self):
+        self._file_path  = None
+        self._pil_img    = None
+        self._prev_img   = None
+        self._tag_dente.set("—")
+        self._tag_branca.set("—")
+        self._tag_fase.set("—")
+        self._note_text.set("")
+        self._drop_canvas.configure(highlightbackground=self.C_BORDER)
+        self._draw_drop_hint()
+        self._update_save_btn()
 
 
 
@@ -1586,7 +1560,7 @@ class App(DnDCTk):
         self.title("DentalPhoto — Gestione Fotografie Cliniche")
         self.geometry("1280x800")
         # --- IMPOSTAZIONE ICONA FINESTRA (Runtime) ---
-        icon_path = Path(__file__).parent / "Icon_APP.jpg"
+        icon_path = Path(__file__).parent / "Icon_APP.png"
         if icon_path.exists():
             try:
                 from PIL import Image, ImageTk
@@ -1959,6 +1933,9 @@ class App(DnDCTk):
         self._aggiorna_statusbar()
 
     def _build_frame(self, key: str) -> ctk.CTkFrame:
+        if key == "webcam":
+            # Passiamo una callback che invia la foto scattata all'Upload
+            return WebcamFrame(self._fc, on_scatto=self._on_foto_scattata)
         if key == "dashboard":
             return DashboardFrame(self._fc, on_modifica_tag=self._goto_modifica)
         if key == "pazienti":
@@ -1984,6 +1961,12 @@ class App(DnDCTk):
         if key == "timeline":
             return TimelineFrame(self._fc)
         raise ValueError(key)
+
+    def _on_foto_scattata(self, percorso_foto: str):
+        self._naviga("upload")
+        # Forza l'inserimento dell'immagine appena scattata nella dropzone
+        self._frames["upload"]._carica_file(Path(percorso_foto))
+        self.toast("📸 Foto acquisita e pronta per il salvataggio!", "success")
 
     def _goto_upload(self, pid: int):
         self._paz_upload = pid
