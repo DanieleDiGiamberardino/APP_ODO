@@ -76,6 +76,7 @@ _NAV_ITEMS: list[dict] = [
     {"key": "dashboard",   "icon": "⬡",  "label": "Dashboard"},
     {"key": "pazienti",    "icon": "👤",  "label": "Pazienti"},
     {"key": "upload",      "icon": "⬆",  "label": "Upload"},
+    {"key": "protocollo",  "icon": "📸", "label": "Protocollo"},
     {"key": "webcam",      "icon": "◉",  "label": "Webcam"},
     {"key": "before_after","icon": "⇌",  "label": "Before / After"},
     {"key": "statistiche", "icon": "⬡",  "label": "Statistiche"},

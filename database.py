@@ -18,10 +18,7 @@ from pathlib import Path
 from datetime import date
 from typing import Optional
 from cryptography.fernet import Fernet
-from database import migra_consenso_privacy
 
-
-migra_consenso_privacy()
 # ---------------------------------------------------------------------------
 # CONFIGURAZIONE PERCORSI (System-Aware)
 # ---------------------------------------------------------------------------
@@ -158,7 +155,7 @@ def init_db() -> None:
         ("indirizzo", "TEXT"), ("medico_curante", "TEXT"), ("allergie", "TEXT"),
         ("anamnesi", "TEXT"), ("farmaci", "TEXT"), ("gruppo_sanguigno", "TEXT"),
         ("sesso", "TEXT"), ("stato_civile", "TEXT"), ("professione", "TEXT"),
-        ("luogo_nascita", "TEXT")
+        ("luogo_nascita", "TEXT"),("consenso_privacy", "INTEGER DEFAULT 0")
     ]
     with get_connection() as conn:
         for col, tipo in nuove_colonne:
@@ -171,14 +168,17 @@ def init_db() -> None:
 # CRUD — PAZIENTI
 # ---------------------------------------------------------------------------
 
-def inserisci_paziente(nome: str, cognome: str, telefono: str = "", note: str = "") -> int:
+def inserisci_paziente(nome: str, cognome: str, telefono: str = "", note: str = "", consenso_privacy: bool = False) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO pazienti (nome, cognome, telefono, note) VALUES (?, ?, ?, ?)",
+            "INSERT INTO pazienti (nome, cognome, telefono, note, consenso_privacy) VALUES (?, ?, ?, ?, ?)",
             (crittografa(nome.strip()), crittografa(cognome.strip()), 
-             crittografa(telefono.strip()), crittografa(note.strip())),
+             crittografa(telefono.strip()), crittografa(note.strip()), int(consenso_privacy)),
         )
         return cur.lastrowid
+def aggiorna_consenso(paziente_id: int, stato: bool) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE pazienti SET consenso_privacy = ? WHERE id = ?", (int(stato), paziente_id))
 
 def cerca_pazienti(testo: str = "") -> list[dict]:
     testo = testo.strip().lower()

@@ -28,6 +28,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 from theme import MODERN_THEME, FONT_TITLE, FONT_BODY, _SidebarMixin
+from protocollo_frame import ProtocolloFrame
 
 # Drag & Drop — opzionale (richiede: pip install tkinterdnd2)
 try:
@@ -636,9 +637,23 @@ class PazientiFrame(ctk.CTkFrame):
         self._entry_cognome = self._campo(fc, "Cognome *", 4)
         self._entry_tel     = self._campo(fc, "Telefono",  6)
         self._entry_note    = self._campo_multi(fc, "Note", 8)
+        # --- INIZIO NUOVO BLOCCO GDPR ---
+        consenso_frame = ctk.CTkFrame(fc, fg_color="transparent")
+        consenso_frame.grid(row=10, column=0, padx=20, pady=(10, 0), sticky="w")
+        
+        self._switch_consenso = ctk.CTkSwitch(
+            consenso_frame, text="", width=44, height=22,
+            progress_color="#00d4aa", button_color="#ffffff",
+            button_hover_color="#e0e0e0", fg_color="#2a4a43", onvalue=1, offvalue=0
+        )
+        self._switch_consenso.grid(row=0, column=0, padx=(0, 10))
+        
+        ctk.CTkLabel(consenso_frame, text="Consenso Privacy (GDPR)", font=FONT_PICCOLO, text_color=COLORI["testo_chiaro"]).grid(row=0, column=1, sticky="w")
+        # --- FINE BLOCCO GDPR ---
 
+        # Cambia la riga del pulsante "Salva Paziente" da row=10 a row=12
         ctk.CTkButton(fc, text="➕  Salva Paziente", font=FONT_NORMALE, height=40,
-                      command=self._salva).grid(row=10, column=0, padx=20, pady=(10, 20), sticky="ew")
+                      command=self._salva).grid(row=12, column=0, padx=20, pady=(16, 20), sticky="ew")
 
         lc = ctk.CTkFrame(self, fg_color=COLORI["card_bg"], corner_radius=12)
         lc.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
@@ -679,11 +694,19 @@ class PazientiFrame(ctk.CTkFrame):
         if not n or not c:
             messagebox.showwarning("Campi obbligatori", "Nome e Cognome richiesti.")
             return
+            
+        # Cattura il valore dello switch
+        consenso = self._switch_consenso.get() == 1
+        
         pid = db.inserisci_paziente(n, c, self._entry_tel.get().strip(),
-                                    self._entry_note.get("1.0", "end").strip())
+                                    self._entry_note.get("1.0", "end").strip(),
+                                    consenso_privacy=consenso)  # Passa il parametro!
+                                    
         for w in (self._entry_nome, self._entry_cognome, self._entry_tel):
             w.delete(0, "end")
         self._entry_note.delete("1.0", "end")
+        self._switch_consenso.deselect()  # Resetta lo switch
+        
         self.aggiorna_lista()
         messagebox.showinfo("Salvato", f"Paziente aggiunto (ID {pid}).")
 
@@ -708,114 +731,68 @@ class PazientiFrame(ctk.CTkFrame):
             self._riga_paziente(i, r)
 
     def _riga_paziente(self, idx: int, r):
-        """
-        Costruisce una riga paziente con:
-          - Avatar / iniziale
-          - Zona clickabile (nome + telefono) che copre tutto il banner
-          - Badge foto
-          - Pulsante elimina
-        Il binding hover/click viene propagato a TUTTI i widget figli
-        in modo che l'intera area risponda al cursore.
-        """
         n_foto = db.conta_foto_per_paziente(r["id"])
+        ha_consenso = bool(r.get("consenso_privacy", 0))
 
         riga = ctk.CTkFrame(self._lista, fg_color=COLORI["sfondo_entry"],
                             corner_radius=8, cursor="hand2")
         riga.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
-        # colonna 1 (testo) si espande; colonne 0/2/3 fisse
         riga.grid_columnconfigure(1, weight=1)
 
-        # ── Avatar ────────────────────────────────────────────────────
+        # ── Avatar (Verde se ha consenso, Rosso se non lo ha) ─────────
+        avatar_bg = "#00d4aa" if ha_consenso else "#e05252"
         avatar = ctk.CTkLabel(
-            riga,
-            text=r["cognome"][0].upper(),
-            font=("Segoe UI", 15, "bold"),
-            width=42, height=42,
-            fg_color=COLORI["accent"],
-            corner_radius=21,
-            text_color="white",
-            cursor="hand2",
+            riga, text=r["cognome"][0].upper(), font=("Segoe UI", 15, "bold"),
+            width=42, height=42, fg_color=avatar_bg, corner_radius=21,
+            text_color="white", cursor="hand2",
         )
         avatar.grid(row=0, column=0, rowspan=2, padx=(10, 8), pady=8)
 
         # ── Testo: nome + telefono ────────────────────────────────────
-        lbl_nome = ctk.CTkLabel(
-            riga,
-            text=f"{r['cognome']} {r['nome']}",
-            font=FONT_NORMALE,
-            anchor="w",
-            cursor="hand2",
-        )
+        lbl_nome = ctk.CTkLabel(riga, text=f"{r['cognome']} {r['nome']}", font=FONT_NORMALE, anchor="w", cursor="hand2")
         lbl_nome.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=(8, 1))
 
-        lbl_tel = ctk.CTkLabel(
-            riga,
-            text=f"📞 {r['telefono'] or '—'}",
-            font=FONT_PICCOLO,
-            text_color=COLORI["testo_grigio"],
-            anchor="w",
-            cursor="hand2",
-        )
+        lbl_tel = ctk.CTkLabel(riga, text=f"📞 {r['telefono'] or '—'}", font=FONT_PICCOLO, text_color=COLORI["testo_grigio"], anchor="w", cursor="hand2")
         lbl_tel.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(0, 8))
+
+        # ── Badge GDPR (Clickabile per il Toggle) ─────────────────────
+        badge_text = "🛡️ Consenso OK" if ha_consenso else "🔴 Manca consenso"
+        badge_fg = "#0d3b2e" if ha_consenso else "#3b1010"
+        badge_txt_c = "#00d4aa" if ha_consenso else "#e05252"
+
+        badge_gdpr = ctk.CTkLabel(
+            riga, text=badge_text, font=FONT_BADGE, fg_color=badge_fg, text_color=badge_txt_c,
+            corner_radius=6, padx=8, pady=3, cursor="hand2"
+        )
+        badge_gdpr.grid(row=0, column=2, rowspan=2, padx=(4, 6))
+
+        # Callback per il toggle on-the-fly
+        def _toggle_gdpr(e, pid=r["id"], stato=ha_consenso):
+            db.aggiorna_consenso(pid, not stato)
+            self.aggiorna_lista() # Ricarica per aggiornare i colori
+
+        badge_gdpr.bind("<Button-1>", _toggle_gdpr)
 
         # ── Badge foto ────────────────────────────────────────────────
         bc = COLORI["accent_bright"] if n_foto > 0 else COLORI["testo_grigio"]
-        badge = ctk.CTkLabel(
-            riga,
-            text=f"📷 {n_foto}",
-            font=FONT_BADGE,
-            fg_color=bc,
-            corner_radius=10,
-            width=48, height=22,
-            text_color="white",
-        )
-        badge.grid(row=0, column=2, rowspan=2, padx=(4, 6))
+        badge_foto = ctk.CTkLabel(riga, text=f"📷 {n_foto}", font=FONT_BADGE, fg_color=bc, corner_radius=10, width=48, height=22, text_color="white")
+        badge_foto.grid(row=0, column=3, rowspan=2, padx=(4, 6))
 
-        # ── Pulsante scheda clinica ──────────────────────────────────
-        btn_scheda = ctk.CTkButton(
-            riga,
-            text="📋",
-            width=32, height=32,
-            font=("Segoe UI", 13),
-            fg_color=COLORI["accent"],
-            hover_color="#1a5276",
-            corner_radius=6,
-            command=lambda rid=r["id"]: SchedaPaziente(self, rid),
-        )
-        btn_scheda.grid(row=0, column=3, rowspan=2, padx=(0, 4))
+        # ── Pulsanti Scheda e Elimina ─────────────────────────────────
+        ctk.CTkButton(riga, text="📋", width=32, height=32, font=("Segoe UI", 13), fg_color=COLORI["accent"], hover_color="#1a5276", corner_radius=6, command=lambda rid=r["id"]: SchedaPaziente(self, rid)).grid(row=0, column=4, rowspan=2, padx=(0, 4))
+        ctk.CTkButton(riga, text="🗑", width=32, height=32, font=("Segoe UI", 13), fg_color="transparent", hover_color=COLORI["accent_bright"], corner_radius=6, command=lambda rid=r["id"], nome=f"{r['cognome']} {r['nome']}": self._elimina_paziente(rid, nome)).grid(row=0, column=5, rowspan=2, padx=(0, 8))
 
-        # ── Pulsante elimina ─────────────────────────────────────────
-        btn_del = ctk.CTkButton(
-            riga,
-            text="🗑",
-            width=32, height=32,
-            font=("Segoe UI", 13),
-            fg_color="transparent",
-            hover_color=COLORI["accent_bright"],
-            corner_radius=6,
-            command=lambda rid=r["id"], nome=f"{r['cognome']} {r['nome']}":
-                self._elimina_paziente(rid, nome),
-        )
-        btn_del.grid(row=0, column=4, rowspan=2, padx=(0, 8))
-
-        # ── Propagazione hover + click a TUTTI i widget figli ─────────
-        # Senza questo, cliccare su un CTkLabel non triggera il binding del frame padre.
-        widget_clickabili = (riga, avatar, lbl_nome, lbl_tel, badge)
-        # btn_scheda and btn_del intentionally excluded — they have their own commands
-
-        def _on_enter(e, f=riga):
-            f.configure(fg_color=COLORI["accent"])
-
-        def _on_leave(e, f=riga):
-            f.configure(fg_color=COLORI["sfondo_entry"])
-
-        def _on_click(e, rid=r["id"]):
-            self._seleziona(rid)
+        # ── Propagazione click ai widget base ─────────────────────────
+        widget_clickabili = (riga, avatar, lbl_nome, lbl_tel, badge_foto)
+        
+        def _on_enter(e, f=riga): f.configure(fg_color=COLORI["accent"])
+        def _on_leave(e, f=riga): f.configure(fg_color=COLORI["sfondo_entry"])
+        def _on_click(e, rid=r["id"]): self._seleziona(rid)
 
         for w in widget_clickabili:
             w.bind("<Button-1>", _on_click)
-            w.bind("<Enter>",    _on_enter)
-            w.bind("<Leave>",    _on_leave)
+            w.bind("<Enter>", _on_enter)
+            w.bind("<Leave>", _on_leave)
 
     def _seleziona(self, pid: int):
         if self.on_paziente_selezionato:
@@ -1559,6 +1536,7 @@ class App(DnDCTk, _SidebarMixin):
         "dashboard":    "📋  Dashboard & Ricerca",
         "pazienti":     "👤  Gestione Pazienti",
         "upload":       "⬆️  Upload Fotografia",
+        "protocollo":   "📸  Protocollo Fotografico",
         "import":       "📦  Import Massivo",
         "statistiche":  "📊  Statistiche Cliniche",
         "modifica_tag": "✏️  Modifica Tag Fotografie",
@@ -1799,6 +1777,8 @@ class App(DnDCTk, _SidebarMixin):
                 return PazientiFrame(self._fc, on_paziente_selezionato=self._goto_upload)
             case "upload":
                 return UploadFrame(self._fc)
+            case "protocollo":                           
+                return ProtocolloFrame(self._fc)
             case "import":
                 return BulkImportFrame(self._fc)
             case "statistiche":

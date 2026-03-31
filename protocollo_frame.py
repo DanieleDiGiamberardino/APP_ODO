@@ -1,49 +1,38 @@
 # =============================================================================
-#  DentalPhoto Pro — ProtocolloFrame
-#  Guida l'assistente alla poltrona attraverso una sessione fotografica
-#  strutturata, basata su protocolli predefiniti.
-#
-#  Dipendenze: customtkinter, Pillow (opzionale, per thumbnail future)
-#  Importa questo modulo nel tuo main e aggiungilo al tuo frame container.
+#  DentalPhoto Pro — ProtocolloFrame (Versione Corretta e Definitiva)
 # =============================================================================
 
 import customtkinter as ctk
 from tkinter import filedialog
+import database as db
 
 # ---------------------------------------------------------------------------
-# THEME — rimpiazza con il tuo import reale:
-#   from config.theme import MODERN_THEME as T
+# TEMA E COLORI (Traduzione sicura)
 # ---------------------------------------------------------------------------
-MODERN_THEME = {
-    "bg_main":        "#0F1117",
-    "bg_panel":       "#1A1D27",
-    "bg_card":        "#1E2130",
-    "bg_input":       "#252837",
-    "bg_hover":       "#2C3047",
-    "accent":         "#4F8EF7",
-    "accent_dim":     "#2D5BB5",
-    "accent_success": "#34C78A",
-    "accent_warning": "#F5A623",
-    "accent_danger":  "#E05252",
-    "text_primary":   "#EDF0FF",
-    "text_secondary": "#8A8FA8",
-    "text_disabled":  "#4A4F66",
-    "border":         "#2E3250",
-    "border_active":  "#4F8EF7",
+from theme import MODERN_THEME as _real_T
+
+T = {
+    "bg_main":        _real_T.get("bg_root", "#0b0e17"),
+    "bg_panel":       _real_T.get("bg_panel", "#131929"),
+    "bg_card":        _real_T.get("bg_panel", "#131929"),
+    "bg_input":       _real_T.get("bg_input", "#0d1424"),
+    "bg_hover":       _real_T.get("bg_panel_alt", "#192035"),
+    "accent":         _real_T.get("accent", "#00d4aa"),
+    "accent_dim":     _real_T.get("accent_dim", "#00a882"),
+    "accent_success": _real_T.get("success", "#22d3a5"),
+    "accent_warning": _real_T.get("warning", "#f5a623"),
+    "accent_danger":  _real_T.get("danger", "#f04a5e"),
+    "text_primary":   _real_T.get("text_primary", "#eef2ff"),
+    "text_secondary": _real_T.get("text_secondary", "#7a90b8"),
+    "text_disabled":  _real_T.get("text_disabled", "#3a4a66"),
+    "border":         _real_T.get("border", "#1e2d4a"),
+    "border_active":  _real_T.get("border_focus", "#00d4aa"),
 }
-T = MODERN_THEME
-
 
 # ---------------------------------------------------------------------------
 # CONFIGURAZIONE PROTOCOLLI
-# Ogni protocollo è un dizionario con:
-#   - label:    nome mostrato nell'OptionMenu
-#   - cols:     numero di colonne della griglia
-#   - shots:    lista ordinata degli slot fotografici
-#     Ogni shot: { "id": str, "name": str, "hint": str, "icon": str }
 # ---------------------------------------------------------------------------
 PROTOCOLS: dict[str, dict] = {
-
     "Ortodonzia (8 Foto)": {
         "label": "Ortodonzia (8 Foto)",
         "cols":   4,
@@ -58,7 +47,6 @@ PROTOCOLS: dict[str, dict] = {
             {"id": "ort_08", "name": "Laterale Sx\nIn Occlusione", "hint": "Divaricatore, lato sinistro","icon": "📷"},
         ],
     },
-
     "Estetica DSD (4 Foto)": {
         "label": "Estetica DSD (4 Foto)",
         "cols":   2,
@@ -69,7 +57,6 @@ PROTOCOLS: dict[str, dict] = {
             {"id": "dsd_04", "name": "Profilo\n¾ Sorriso",      "hint": "45°, sorriso naturale",         "icon": "💎"},
         ],
     },
-
     "Full Mouth (12 Foto)": {
         "label": "Full Mouth (12 Foto)",
         "cols":   4,
@@ -94,226 +81,129 @@ PROTOCOL_KEYS = list(PROTOCOLS.keys())
 
 
 # =============================================================================
-#  PhotoSlotCard — singola card "dropzone" per uno scatto richiesto
+#  POPUP SELEZIONE PAZIENTE
+# =============================================================================
+class SelezionaPazienteDialog(ctk.CTkToplevel):
+    """Popup per cercare e selezionare un paziente dal database."""
+    def __init__(self, master, on_select):
+        super().__init__(master)
+        self.title("🔍 Cerca Paziente")
+        self.geometry("450x550")
+        self.on_select = on_select
+        self.configure(fg_color=T["bg_main"])
+        
+        self.attributes("-topmost", True)
+        self.grab_set()
+
+        self.entry_cerca = ctk.CTkEntry(self, placeholder_text="Digita cognome o nome...", height=40, fg_color=T["bg_input"])
+        self.entry_cerca.pack(padx=20, pady=20, fill="x")
+        self.entry_cerca.bind("<KeyRelease>", self._cerca)
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(padx=20, pady=(0, 20), fill="both", expand=True)
+        self._cerca()
+
+    def _cerca(self, event=None):
+        q = self.entry_cerca.get()
+        for w in self.scroll.winfo_children(): 
+            w.destroy()
+            
+        try:
+            pazienti = db.cerca_pazienti(q)
+        except Exception:
+            pazienti = []
+            
+        if not pazienti:
+            ctk.CTkLabel(self.scroll, text="Nessun paziente trovato.", text_color=T["text_secondary"]).pack(pady=20)
+            
+        for p in pazienti[:30]:
+            btn = ctk.CTkButton(
+                self.scroll,
+                text=f"👤 {p['cognome']} {p['nome']}  (ID: {p['id']})",
+                anchor="w", height=38,
+                fg_color=T["bg_panel"], hover_color=T["accent_dim"],
+                command=lambda paz=p: self._scegli(paz)
+            )
+            btn.pack(fill="x", pady=3)
+
+    def _scegli(self, paz):
+        self.on_select(paz)
+        self.destroy()
+
+
+# =============================================================================
+#  SINGOLA CARD FOTOGRAFICA (SLOT)
 # =============================================================================
 class PhotoSlotCard(ctk.CTkFrame):
-    """
-    Card rettangolare che rappresenta uno slot fotografico nel protocollo.
-
-    Stati:
-        EMPTY   → sfondo scuro, icona + nome, bordo tratteggiato simulato
-        FILLED  → sfondo con thumbnail, badge ✓ verde in alto a destra
-    """
-
     SLOT_W = 190
     SLOT_H = 155
 
     def __init__(self, master, shot: dict, slot_index: int, **kwargs):
-        super().__init__(
-            master,
-            width=self.SLOT_W,
-            height=self.SLOT_H,
-            corner_radius=10,
-            fg_color=T["bg_input"],
-            border_width=1,
-            border_color=T["border"],
-            **kwargs,
-        )
+        super().__init__(master, width=self.SLOT_W, height=self.SLOT_H, corner_radius=10,
+                         fg_color=T["bg_input"], border_width=1, border_color=T["border"], **kwargs)
         self.shot       = shot
         self.slot_index = slot_index
         self.image_path: str | None = None
         self._filled    = False
-
+        
         self.grid_propagate(False)
         self.pack_propagate(False)
-
         self._build_empty_state()
         self._bind_hover()
 
-    # ------------------------------------------------------------------
-    # BUILD — stato vuoto (dropzone)
-    # ------------------------------------------------------------------
     def _build_empty_state(self):
-        """Costruisce il layout 'dropzone' con icona e nome richiesto."""
         self._clear_children()
-
-        # Numero progressivo in alto a sinistra
-        self._lbl_index = ctk.CTkLabel(
-            self,
-            text=f"#{self.slot_index + 1:02d}",
-            font=ctk.CTkFont(family="SF Pro Display", size=10, weight="bold"),
-            text_color=T["text_disabled"],
-            fg_color="transparent",
-        )
+        self._lbl_index = ctk.CTkLabel(self, text=f"#{self.slot_index + 1:02d}", font=("Segoe UI", 10, "bold"), text_color=T["text_disabled"])
         self._lbl_index.place(x=8, y=7)
 
-        # Contenitore centrale (icona + nome + hint)
         center = ctk.CTkFrame(self, fg_color="transparent")
         center.place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(center, text=self.shot["icon"], font=("Segoe UI", 28), text_color=T["text_disabled"]).pack(pady=(0, 4))
+        ctk.CTkLabel(center, text=self.shot["name"], font=("Segoe UI", 12, "bold"), text_color=T["text_secondary"], justify="center").pack()
+        ctk.CTkLabel(center, text=self.shot["hint"], font=("Segoe UI", 9), text_color=T["text_disabled"], justify="center", wraplength=160).pack(pady=(2, 0))
 
-        self._lbl_icon = ctk.CTkLabel(
-            center,
-            text=self.shot["icon"],
-            font=ctk.CTkFont(size=28),
-            text_color=T["text_disabled"],
-            fg_color="transparent",
-        )
-        self._lbl_icon.pack(pady=(0, 4))
-
-        self._lbl_name = ctk.CTkLabel(
-            center,
-            text=self.shot["name"],
-            font=ctk.CTkFont(family="SF Pro Display", size=12, weight="bold"),
-            text_color=T["text_secondary"],
-            fg_color="transparent",
-            justify="center",
-        )
-        self._lbl_name.pack()
-
-        self._lbl_hint = ctk.CTkLabel(
-            center,
-            text=self.shot["hint"],
-            font=ctk.CTkFont(size=9),
-            text_color=T["text_disabled"],
-            fg_color="transparent",
-            justify="center",
-            wraplength=160,
-        )
-        self._lbl_hint.pack(pady=(2, 0))
-
-        # Pulsante "+" in basso — apre filedialog
-        self._btn_add = ctk.CTkButton(
-            self,
-            text="+ Aggiungi",
-            width=90,
-            height=24,
-            corner_radius=6,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            fg_color=T["bg_hover"],
-            hover_color=T["accent_dim"],
-            text_color=T["text_secondary"],
-            border_width=1,
-            border_color=T["border"],
-            command=self._pick_image,
-        )
+        self._btn_add = ctk.CTkButton(self, text="+ Aggiungi", width=90, height=24, corner_radius=6, font=("Segoe UI", 10, "bold"),
+                                      fg_color=T["bg_hover"], hover_color=T["accent_dim"], text_color=T["text_secondary"],
+                                      border_width=1, border_color=T["border"], command=self._pick_image)
         self._btn_add.place(relx=0.5, rely=1.0, anchor="s", y=-10)
 
-    # ------------------------------------------------------------------
-    # BUILD — stato riempito
-    # ------------------------------------------------------------------
     def _build_filled_state(self, path: str):
-        """Mostra il nome file caricato e un badge di completamento."""
         self._clear_children()
+        self.configure(fg_color=T["bg_hover"], border_color=T["accent_success"], border_width=2)
+        ctk.CTkLabel(self, text=" ✓ ", font=("Segoe UI", 10, "bold"), text_color="#FFFFFF", fg_color=T["accent_success"], corner_radius=4).place(relx=1.0, x=-6, y=6, anchor="ne")
+        ctk.CTkLabel(self, text=f"#{self.slot_index + 1:02d}", font=("Segoe UI", 10, "bold"), text_color=T["accent_success"]).place(x=8, y=7)
 
-        self.configure(
-            fg_color=T["bg_hover"],
-            border_color=T["accent_success"],
-            border_width=2,
-        )
-
-        # Badge ✓ in alto a destra
-        badge = ctk.CTkLabel(
-            self,
-            text=" ✓ ",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color="#FFFFFF",
-            fg_color=T["accent_success"],
-            corner_radius=4,
-        )
-        badge.place(relx=1.0, x=-6, y=6, anchor="ne")
-
-        # Numero slot
-        ctk.CTkLabel(
-            self,
-            text=f"#{self.slot_index + 1:02d}",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=T["accent_success"],
-            fg_color="transparent",
-        ).place(x=8, y=7)
-
-        # Icona e nome al centro
         center = ctk.CTkFrame(self, fg_color="transparent")
         center.place(relx=0.5, rely=0.45, anchor="center")
+        ctk.CTkLabel(center, text="🖼️", font=("Segoe UI", 26)).pack(pady=(0, 4))
+        ctk.CTkLabel(center, text=self.shot["name"], font=("Segoe UI", 12, "bold"), text_color=T["text_primary"], justify="center").pack()
 
-        ctk.CTkLabel(
-            center, text="🖼️",
-            font=ctk.CTkFont(size=26),
-            fg_color="transparent",
-        ).pack(pady=(0, 4))
-
-        ctk.CTkLabel(
-            center,
-            text=self.shot["name"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=T["text_primary"],
-            fg_color="transparent",
-            justify="center",
-        ).pack()
-
-        # Nome file troncato in basso
         filename = path.split("/")[-1].split("\\")[-1]
-        if len(filename) > 22:
-            filename = filename[:19] + "…"
+        if len(filename) > 22: filename = filename[:19] + "…"
+        ctk.CTkLabel(self, text=filename, font=("Segoe UI", 9), text_color=T["text_secondary"]).place(relx=0.5, rely=1.0, anchor="s", y=-28)
 
-        ctk.CTkLabel(
-            self,
-            text=filename,
-            font=ctk.CTkFont(size=9),
-            text_color=T["text_secondary"],
-            fg_color="transparent",
-        ).place(relx=0.5, rely=1.0, anchor="s", y=-28)
+        ctk.CTkButton(self, text="✕ Rimuovi", width=85, height=22, corner_radius=6, font=("Segoe UI", 9), fg_color="transparent",
+                      hover_color=T["accent_danger"], text_color=T["text_disabled"], command=self._remove_image).place(relx=0.5, rely=1.0, anchor="s", y=-6)
 
-        # Pulsante rimuovi
-        ctk.CTkButton(
-            self,
-            text="✕ Rimuovi",
-            width=85,
-            height=22,
-            corner_radius=6,
-            font=ctk.CTkFont(size=9),
-            fg_color="transparent",
-            hover_color=T["accent_danger"],
-            text_color=T["text_disabled"],
-            border_width=0,
-            command=self._remove_image,
-        ).place(relx=0.5, rely=1.0, anchor="s", y=-6)
-
-    # ------------------------------------------------------------------
-    # AZIONI
-    # ------------------------------------------------------------------
     def _pick_image(self):
-        """Apre un file dialog per selezionare un'immagine."""
-        path = filedialog.askopenfilename(
-            title=f"Seleziona: {self.shot['name'].replace(chr(10), ' ')}",
-            filetypes=[
-                ("Immagini", "*.jpg *.jpeg *.png *.tiff *.tif *.bmp *.webp"),
-                ("Tutti i file", "*.*"),
-            ],
-        )
-        if path:
-            self.set_image(path)
+        path = filedialog.askopenfilename(title=f"Seleziona: {self.shot['name'].replace(chr(10), ' ')}",
+                                          filetypes=[("Immagini", "*.jpg *.jpeg *.png *.webp"), ("Tutti i file", "*.*")])
+        if path: self.set_image(path)
 
     def set_image(self, path: str):
-        """Imposta l'immagine (chiamabile anche dall'esterno, es. drag&drop)."""
         self.image_path = path
-        self._filled    = True
+        self._filled = True
         self._build_filled_state(path)
         self._notify_parent()
 
     def _remove_image(self):
-        """Rimuove l'immagine e torna allo stato vuoto."""
         self.image_path = None
-        self._filled    = False
-        self.configure(
-            fg_color=T["bg_input"],
-            border_color=T["border"],
-            border_width=1,
-        )
+        self._filled = False
+        self.configure(fg_color=T["bg_input"], border_color=T["border"], border_width=1)
         self._build_empty_state()
         self._notify_parent()
 
     def _notify_parent(self):
-        """Propaga l'aggiornamento al ProtocolloFrame per ricalcolare il progress."""
         parent = self.master
         while parent is not None:
             if hasattr(parent, "_on_slot_changed"):
@@ -321,27 +211,12 @@ class PhotoSlotCard(ctk.CTkFrame):
                 break
             parent = getattr(parent, "master", None)
 
-    # ------------------------------------------------------------------
-    # HOVER FX
-    # ------------------------------------------------------------------
     def _bind_hover(self):
-        self.bind("<Enter>", self._on_enter)
-        self.bind("<Leave>", self._on_leave)
+        self.bind("<Enter>", lambda e: self.configure(border_color=T["accent"], border_width=2) if not self._filled else None)
+        self.bind("<Leave>", lambda e: self.configure(border_color=T["border"], border_width=1) if not self._filled else None)
 
-    def _on_enter(self, _=None):
-        if not self._filled:
-            self.configure(border_color=T["accent"], border_width=2)
-
-    def _on_leave(self, _=None):
-        if not self._filled:
-            self.configure(border_color=T["border"], border_width=1)
-
-    # ------------------------------------------------------------------
-    # UTILS
-    # ------------------------------------------------------------------
     def _clear_children(self):
-        for widget in self.winfo_children():
-            widget.destroy()
+        for widget in self.winfo_children(): widget.destroy()
 
     @property
     def is_filled(self) -> bool:
@@ -349,463 +224,204 @@ class PhotoSlotCard(ctk.CTkFrame):
 
 
 # =============================================================================
-#  ProtocolloFrame — frame principale della feature
+#  PROTOCOLLO FRAME PRINCIPALE
 # =============================================================================
 class ProtocolloFrame(ctk.CTkFrame):
-    """
-    Frame principale per la sessione fotografica guidata.
-
-    Layout:
-        ┌──────────────┬────────────────────────────────────────┐
-        │  Pannello    │                                        │
-        │  Controlli   │   Griglia Slot (dinamica)              │
-        │  (~250px)    │                                        │
-        └──────────────┴────────────────────────────────────────┘
-    """
-
     SIDEBAR_W = 260
 
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color=T["bg_main"], **kwargs)
 
-        # Stato interno
+        self._paziente_selezionato = None
         self._selected_protocol_key: str = PROTOCOL_KEYS[0]
         self._slots: list[PhotoSlotCard]  = []
 
-        # Layout radice: 2 colonne
         self.grid_columnconfigure(0, weight=0, minsize=self.SIDEBAR_W)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         self._build_sidebar()
         self._build_content_area()
-
-        # Carica protocollo di default
         self._load_protocol(self._selected_protocol_key)
 
-    # ==========================================================================
-    #  SIDEBAR — colonna sinistra
-    # ==========================================================================
     def _build_sidebar(self):
-        self._sidebar = ctk.CTkFrame(
-            self,
-            width=self.SIDEBAR_W,
-            fg_color=T["bg_panel"],
-            corner_radius=0,
-            border_width=1,
-            border_color=T["border"],
-        )
+        self._sidebar = ctk.CTkFrame(self, width=self.SIDEBAR_W, fg_color=T["bg_panel"], corner_radius=0, border_width=1, border_color=T["border"])
         self._sidebar.grid(row=0, column=0, sticky="nsew")
         self._sidebar.grid_propagate(False)
         self._sidebar.grid_columnconfigure(0, weight=1)
 
-        # — Logo / Titolo sezione ————————————————————————————————————————
         header = ctk.CTkFrame(self._sidebar, fg_color=T["bg_card"], corner_radius=0)
-        header.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 0))
-        header.grid_columnconfigure(0, weight=1)
+        header.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(header, text="📋  Protocollo", font=("Segoe UI", 15, "bold"), text_color=T["text_primary"]).grid(row=0, column=0, padx=18, pady=(16, 2), sticky="w")
+        ctk.CTkLabel(header, text="Sessione fotografica guidata", font=("Segoe UI", 11), text_color=T["text_secondary"]).grid(row=1, column=0, padx=18, pady=(0, 14), sticky="w")
+        ctk.CTkFrame(self._sidebar, height=1, fg_color=T["border"]).grid(row=1, column=0, sticky="ew")
 
-        ctk.CTkLabel(
-            header,
-            text="📋  Protocollo",
-            font=ctk.CTkFont(family="SF Pro Display", size=15, weight="bold"),
-            text_color=T["text_primary"],
-            anchor="w",
-        ).grid(row=0, column=0, padx=18, pady=(16, 2), sticky="w")
-
-        ctk.CTkLabel(
-            header,
-            text="Sessione fotografica guidata",
-            font=ctk.CTkFont(size=11),
-            text_color=T["text_secondary"],
-            anchor="w",
-        ).grid(row=1, column=0, padx=18, pady=(0, 14), sticky="w")
-
-        # Separatore visivo
-        ctk.CTkFrame(
-            self._sidebar, height=1, fg_color=T["border"]
-        ).grid(row=1, column=0, sticky="ew")
-
-        # Contenuto scrollabile della sidebar
-        inner = ctk.CTkScrollableFrame(
-            self._sidebar,
-            fg_color="transparent",
-            scrollbar_button_color=T["border"],
-            scrollbar_button_hover_color=T["accent_dim"],
-        )
-        inner.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
+        inner = ctk.CTkScrollableFrame(self._sidebar, fg_color="transparent")
+        inner.grid(row=2, column=0, sticky="nsew")
         self._sidebar.grid_rowconfigure(2, weight=1)
         inner.grid_columnconfigure(0, weight=1)
 
-        pad_x = 16
-
-        # — Sezione Paziente ————————————————————————————————————————————
         self._build_section_title(inner, row=0, text="👤  Paziente")
-
-        self._patient_card = ctk.CTkFrame(
-            inner,
-            fg_color=T["bg_input"],
-            corner_radius=8,
-            border_width=1,
-            border_color=T["border"],
-            height=64,
-        )
-        self._patient_card.grid(row=1, column=0, sticky="ew", padx=pad_x, pady=(4, 14))
+        self._patient_card = ctk.CTkFrame(inner, fg_color=T["bg_input"], corner_radius=8, border_width=1, border_color=T["border"], height=64)
+        self._patient_card.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 14))
         self._patient_card.grid_propagate(False)
-        self._patient_card.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            self._patient_card,
-            text="Nessun paziente selezionato",
-            font=ctk.CTkFont(size=11),
-            text_color=T["text_disabled"],
-        ).place(relx=0.5, rely=0.35, anchor="center")
-
-        self._btn_select_patient = ctk.CTkButton(
-            self._patient_card,
-            text="Seleziona →",
-            width=100,
-            height=20,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=5,
-            fg_color=T["accent_dim"],
-            hover_color=T["accent"],
-            text_color="#FFFFFF",
-            command=self._on_select_patient,
-        )
+        
+        ctk.CTkLabel(self._patient_card, text="Nessun paziente", font=("Segoe UI", 11), text_color=T["text_disabled"]).place(relx=0.5, rely=0.35, anchor="center")
+        self._btn_select_patient = ctk.CTkButton(self._patient_card, text="Seleziona →", width=100, height=20, font=("Segoe UI", 10, "bold"),
+                                                 fg_color=T["accent_dim"], hover_color=T["accent"], command=self._on_select_patient)
         self._btn_select_patient.place(relx=0.5, rely=0.78, anchor="center")
 
-        # — Sezione Protocollo ——————————————————————————————————————————
-        self._build_section_title(inner, row=2, text="🗂️  Tipo di Protocollo")
-
+        self._build_section_title(inner, row=2, text="🗂️  Tipo Protocollo")
         self._protocol_var = ctk.StringVar(value=PROTOCOL_KEYS[0])
-        self._protocol_menu = ctk.CTkOptionMenu(
-            inner,
-            values=PROTOCOL_KEYS,
-            variable=self._protocol_var,
-            font=ctk.CTkFont(size=12),
-            dropdown_font=ctk.CTkFont(size=12),
-            fg_color=T["bg_input"],
-            button_color=T["accent_dim"],
-            button_hover_color=T["accent"],
-            dropdown_fg_color=T["bg_card"],
-            dropdown_hover_color=T["bg_hover"],
-            text_color=T["text_primary"],
-            dropdown_text_color=T["text_primary"],
-            corner_radius=8,
-            dynamic_resizing=False,
-            width=self.SIDEBAR_W - pad_x * 2,
-            command=self._on_protocol_change,
-        )
-        self._protocol_menu.grid(row=3, column=0, padx=pad_x, pady=(4, 16), sticky="ew")
+        self._protocol_menu = ctk.CTkOptionMenu(inner, values=PROTOCOL_KEYS, variable=self._protocol_var, font=("Segoe UI", 12),
+                                                fg_color=T["bg_input"], button_color=T["accent_dim"], button_hover_color=T["accent"],
+                                                command=self._on_protocol_change)
+        self._protocol_menu.grid(row=3, column=0, padx=16, pady=(4, 16), sticky="ew")
 
-        # — Progress box ————————————————————————————————————————————————
         self._build_section_title(inner, row=4, text="📊  Avanzamento")
-
-        self._progress_frame = ctk.CTkFrame(
-            inner,
-            fg_color=T["bg_input"],
-            corner_radius=8,
-            border_width=1,
-            border_color=T["border"],
-        )
-        self._progress_frame.grid(row=5, column=0, sticky="ew", padx=pad_x, pady=(4, 16))
+        self._progress_frame = ctk.CTkFrame(inner, fg_color=T["bg_input"], corner_radius=8, border_width=1, border_color=T["border"])
+        self._progress_frame.grid(row=5, column=0, sticky="ew", padx=16, pady=(4, 16))
         self._progress_frame.grid_columnconfigure(0, weight=1)
 
-        self._lbl_progress_count = ctk.CTkLabel(
-            self._progress_frame,
-            text="0 / 0  foto",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            text_color=T["accent"],
-        )
+        self._lbl_progress_count = ctk.CTkLabel(self._progress_frame, text="0 / 0  foto", font=("Segoe UI", 20, "bold"), text_color=T["accent"])
         self._lbl_progress_count.grid(row=0, column=0, pady=(12, 4))
-
-        self._progressbar = ctk.CTkProgressBar(
-            self._progress_frame,
-            width=self.SIDEBAR_W - pad_x * 2 - 20,
-            height=8,
-            corner_radius=4,
-            fg_color=T["bg_hover"],
-            progress_color=T["accent"],
-        )
+        self._progressbar = ctk.CTkProgressBar(self._progress_frame, height=8, corner_radius=4, fg_color=T["bg_hover"], progress_color=T["accent"])
         self._progressbar.set(0)
-        self._progressbar.grid(row=1, column=0, padx=10, pady=(0, 8))
-
-        self._lbl_progress_pct = ctk.CTkLabel(
-            self._progress_frame,
-            text="0% completato",
-            font=ctk.CTkFont(size=10),
-            text_color=T["text_secondary"],
-        )
+        self._progressbar.grid(row=1, column=0, padx=10, pady=(0, 8), sticky="ew")
+        self._lbl_progress_pct = ctk.CTkLabel(self._progress_frame, text="0% completato", font=("Segoe UI", 10), text_color=T["text_secondary"])
         self._lbl_progress_pct.grid(row=2, column=0, pady=(0, 12))
 
-        # — Note di sessione ————————————————————————————————————————————
         self._build_section_title(inner, row=6, text="📝  Note Sessione")
-
-        self._txt_notes = ctk.CTkTextbox(
-            inner,
-            height=80,
-            fg_color=T["bg_input"],
-            border_width=1,
-            border_color=T["border"],
-            text_color=T["text_primary"],
-            font=ctk.CTkFont(size=11),
-            corner_radius=8,
-        )
-        self._txt_notes.grid(row=7, column=0, sticky="ew", padx=pad_x, pady=(4, 0))
+        self._txt_notes = ctk.CTkTextbox(inner, height=80, fg_color=T["bg_input"], border_width=1, border_color=T["border"], font=("Segoe UI", 11))
+        self._txt_notes.grid(row=7, column=0, sticky="ew", padx=16, pady=(4, 0))
         self._txt_notes.insert("0.0", "Note cliniche aggiuntive…")
 
-        # — Footer sidebar: bottone Salva ————————————————————————————————
-        footer = ctk.CTkFrame(
-            self._sidebar,
-            fg_color=T["bg_card"],
-            corner_radius=0,
-            border_width=1,
-            border_color=T["border"],
-        )
+        footer = ctk.CTkFrame(self._sidebar, fg_color=T["bg_card"], corner_radius=0, border_width=1, border_color=T["border"])
         footer.grid(row=3, column=0, sticky="ew")
         footer.grid_columnconfigure(0, weight=1)
-
-        self._btn_save = ctk.CTkButton(
-            footer,
-            text="💾  Salva Protocollo",
-            height=42,
-            corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=T["accent_dim"],
-            hover_color=T["accent"],
-            text_color="#FFFFFF",
-            state="disabled",
-            command=self._on_save_protocol,
-        )
+        self._btn_save = ctk.CTkButton(footer, text="💾  Salva Protocollo", height=42, font=("Segoe UI", 13, "bold"),
+                                       fg_color=T["accent_dim"], hover_color=T["accent"], state="disabled", command=self._on_save_protocol)
         self._btn_save.grid(row=0, column=0, padx=16, pady=14, sticky="ew")
 
-    # ==========================================================================
-    #  CONTENT AREA — colonna destra
-    # ==========================================================================
     def _build_content_area(self):
-        self._content = ctk.CTkFrame(
-            self,
-            fg_color=T["bg_main"],
-            corner_radius=0,
-        )
+        self._content = ctk.CTkFrame(self, fg_color=T["bg_main"], corner_radius=0)
         self._content.grid(row=0, column=1, sticky="nsew")
         self._content.grid_rowconfigure(1, weight=1)
         self._content.grid_columnconfigure(0, weight=1)
 
-        # Header content area
-        self._content_header = ctk.CTkFrame(
-            self._content,
-            fg_color=T["bg_panel"],
-            corner_radius=0,
-            border_width=1,
-            border_color=T["border"],
-            height=64,
-        )
+        self._content_header = ctk.CTkFrame(self._content, fg_color=T["bg_panel"], corner_radius=0, border_width=1, border_color=T["border"], height=64)
         self._content_header.grid(row=0, column=0, sticky="ew")
         self._content_header.grid_propagate(False)
         self._content_header.grid_columnconfigure(1, weight=1)
 
-        self._lbl_protocol_title = ctk.CTkLabel(
-            self._content_header,
-            text="",
-            font=ctk.CTkFont(size=17, weight="bold"),
-            text_color=T["text_primary"],
-            anchor="w",
-        )
+        self._lbl_protocol_title = ctk.CTkLabel(self._content_header, text="", font=("Segoe UI", 17, "bold"), text_color=T["text_primary"])
         self._lbl_protocol_title.grid(row=0, column=0, padx=(22, 0), pady=(12, 2), sticky="w")
-
-        self._lbl_protocol_desc = ctk.CTkLabel(
-            self._content_header,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color=T["text_secondary"],
-            anchor="w",
-        )
+        self._lbl_protocol_desc = ctk.CTkLabel(self._content_header, text="", font=("Segoe UI", 11), text_color=T["text_secondary"])
         self._lbl_protocol_desc.grid(row=1, column=0, padx=(22, 0), pady=(0, 10), sticky="w")
 
-        # Badge "slot rimanenti" a destra
-        self._lbl_badge = ctk.CTkLabel(
-            self._content_header,
-            text="",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=T["accent"],
-            fg_color=T["bg_hover"],
-            corner_radius=6,
-            padx=10,
-            pady=4,
-        )
+        self._lbl_badge = ctk.CTkLabel(self._content_header, text="", font=("Segoe UI", 10, "bold"), text_color=T["accent"], fg_color=T["bg_hover"], corner_radius=6, padx=10, pady=4)
         self._lbl_badge.grid(row=0, column=2, rowspan=2, padx=22, pady=14, sticky="e")
 
-        # Area scrollabile per la griglia degli slot
-        self._grid_scroll = ctk.CTkScrollableFrame(
-            self._content,
-            fg_color=T["bg_main"],
-            scrollbar_button_color=T["border"],
-            scrollbar_button_hover_color=T["accent_dim"],
-        )
+        self._grid_scroll = ctk.CTkScrollableFrame(self._content, fg_color=T["bg_main"])
         self._grid_scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
 
-        # Placeholder mostrato quando non c'è un protocollo caricato
-        self._placeholder = ctk.CTkLabel(
-            self._grid_scroll,
-            text="Seleziona un protocollo per iniziare →",
-            font=ctk.CTkFont(size=14),
-            text_color=T["text_disabled"],
-        )
-
-    # ==========================================================================
-    #  LOGICA PROTOCOLLO
-    # ==========================================================================
     def _load_protocol(self, key: str):
-        """Distrugge la griglia corrente e ne costruisce una nuova."""
         self._selected_protocol_key = key
         protocol = PROTOCOLS[key]
 
-        # Rimuovi tutti i widget precedenti dalla griglia
-        for widget in self._grid_scroll.winfo_children():
-            widget.destroy()
+        for widget in self._grid_scroll.winfo_children(): widget.destroy()
         self._slots.clear()
 
-        # Aggiorna header
         self._lbl_protocol_title.configure(text=f"📋  {protocol['label']}")
-        n_shots = len(protocol["shots"])
-        self._lbl_protocol_desc.configure(
-            text=f"{n_shots} scatti richiesti · Completare la griglia per sbloccare il salvataggio"
-        )
+        self._lbl_protocol_desc.configure(text=f"{len(protocol['shots'])} scatti richiesti · Completare la griglia per sbloccare il salvataggio")
 
-        # Costruisci griglia
         cols = protocol["cols"]
-        self._grid_scroll.grid_columnconfigure(
-            list(range(cols)), weight=1
-        )
+        self._grid_scroll.grid_columnconfigure(list(range(cols)), weight=1)
 
         for idx, shot in enumerate(protocol["shots"]):
-            row_i = idx // cols
-            col_i = idx % cols
-
-            slot = PhotoSlotCard(
-                self._grid_scroll,
-                shot=shot,
-                slot_index=idx,
-            )
-            slot.grid(
-                row=row_i,
-                column=col_i,
-                padx=12,
-                pady=12,
-                sticky="n",
-            )
+            slot = PhotoSlotCard(self._grid_scroll, shot=shot, slot_index=idx)
+            slot.grid(row=idx // cols, column=idx % cols, padx=12, pady=12, sticky="n")
             self._slots.append(slot)
 
-        # Reset progress
         self._update_progress()
 
     def _on_slot_changed(self):
-        """Callback chiamato da ogni PhotoSlotCard quando cambia stato."""
         self._update_progress()
 
     def _update_progress(self):
-        """Aggiorna progressbar, label e stato del tasto Salva."""
-        total  = len(self._slots)
+        total = len(self._slots)
         filled = sum(1 for s in self._slots if s.is_filled)
-
         pct = filled / total if total > 0 else 0.0
 
         self._progressbar.set(pct)
         self._lbl_progress_count.configure(text=f"{filled} / {total}  foto")
-        self._lbl_progress_pct.configure(
-            text=f"{int(pct * 100)}% completato"
-        )
+        self._lbl_progress_pct.configure(text=f"{int(pct * 100)}% completato")
 
         remaining = total - filled
         if remaining == 0:
-            self._lbl_badge.configure(
-                text="✓  Completato",
-                text_color=T["accent_success"],
-                fg_color=T["bg_hover"],
-            )
+            self._lbl_badge.configure(text="✓  Completato", text_color=T["accent_success"])
             self._progressbar.configure(progress_color=T["accent_success"])
         else:
-            self._lbl_badge.configure(
-                text=f"{remaining} slot rimanenti",
-                text_color=T["accent"],
-                fg_color=T["bg_hover"],
-            )
+            self._lbl_badge.configure(text=f"{remaining} slot rimanenti", text_color=T["accent"])
             self._progressbar.configure(progress_color=T["accent"])
 
-        # Abilita il tasto Salva solo se tutti gli slot sono pieni
-        self._btn_save.configure(
-            state="normal" if filled == total and total > 0 else "disabled",
-            fg_color=T["accent"] if filled == total else T["accent_dim"],
-        )
+        self._btn_save.configure(state="normal" if filled == total and total > 0 else "disabled",
+                                 fg_color=T["accent"] if filled == total else T["accent_dim"])
 
-    # ==========================================================================
-    #  EVENT HANDLERS
-    # ==========================================================================
     def _on_protocol_change(self, value: str):
         self._load_protocol(value)
 
     def _on_select_patient(self):
-        """
-        Placeholder: sostituisci con l'apertura della tua PatientPickerDialog.
-        Esempio di signature attesa:
-            dialog = PatientPickerDialog(self)
-            patient = dialog.get_result()
-            if patient:
-                self._set_patient(patient)
-        """
-        # Simulazione visiva per ora
+        SelezionaPazienteDialog(self, on_select=self._set_patient)
+
+    def _set_patient(self, paz: dict):
+        self._paziente_selezionato = paz
         self._patient_card.configure(border_color=T["accent"])
-        ctk.CTkLabel(
-            self._patient_card,
-            text="👤  Rossi Mario — #00124",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=T["text_primary"],
-            fg_color="transparent",
-        ).place(relx=0.5, rely=0.35, anchor="center")
+        for widget in self._patient_card.winfo_children():
+            if isinstance(widget, ctk.CTkLabel): widget.destroy()
+                
+        ctk.CTkLabel(self._patient_card, text=f"👤  {paz['cognome']} {paz['nome']} — #{paz['id']}", font=("Segoe UI", 11, "bold"), text_color=T["text_primary"]).place(relx=0.5, rely=0.35, anchor="center")
         self._btn_select_patient.configure(text="Cambia →")
 
     def _on_save_protocol(self):
-        """
-        Placeholder: implementa qui la logica di salvataggio su DB.
-        Dati disponibili:
-            - self._selected_protocol_key  → chiave del protocollo
-            - self._slots                  → lista PhotoSlotCard
-            - slot.image_path              → path del file per ogni slot
-            - slot.shot["id"]              → id univoco dello scatto
-        """
-        paths = {s.shot["id"]: s.image_path for s in self._slots}
-        notes = self._txt_notes.get("0.0", "end").strip()
-        print("[ProtocolloFrame] Salvataggio →", paths)
-        print("[ProtocolloFrame] Note →", notes)
-        # TODO: chiamare il tuo DAL (Data Access Layer) qui
+        if not self._paziente_selezionato:
+            try: self.winfo_toplevel().toast("Devi prima selezionare un Paziente!", "error")
+            except: pass
+            return
 
-    # ==========================================================================
-    #  HELPERS
-    # ==========================================================================
+        paz_id = self._paziente_selezionato["id"]
+        note_globali = self._txt_notes.get("0.0", "end").strip()
+        nome_protocollo = PROTOCOLS[self._selected_protocol_key]["label"]
+        salvate = 0
+        
+        for slot in self._slots:
+            if slot.is_filled and slot.image_path:
+                nome_scatto = slot.shot["name"].replace('\n', ' ')
+                nota_scatto = f"[{nome_protocollo}] {nome_scatto}"
+                if note_globali and note_globali != "Note cliniche aggiuntive…":
+                    nota_scatto += f" | {note_globali}"
+
+                try:
+                    db.upload_foto(paziente_id=paz_id, sorgente_path=slot.image_path, fase=nome_scatto, note=nota_scatto)
+                    salvate += 1
+                except Exception as e:
+                    print(f"Errore salvataggio foto {nome_scatto}: {e}")
+
+        try: self.winfo_toplevel().toast(f"✅ Protocollo completato! {salvate} foto salvate.", "success")
+        except: pass
+            
+        self._load_protocol(self._selected_protocol_key)
+        self._txt_notes.delete("0.0", "end")
+        self._txt_notes.insert("0.0", "Note cliniche aggiuntive…")
+
     def _build_section_title(self, parent, row: int, text: str):
-        ctk.CTkLabel(
-            parent,
-            text=text,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=T["text_secondary"],
-            anchor="w",
-        ).grid(row=row, column=0, sticky="w", padx=16, pady=(14, 2))
+        ctk.CTkLabel(parent, text=text, font=("Segoe UI", 11, "bold"), text_color=T["text_secondary"]).grid(row=row, column=0, sticky="w", padx=16, pady=(14, 2))
 
-
-# =============================================================================
-#  ENTRY POINT — preview standalone (rimuovi in produzione)
-# =============================================================================
 if __name__ == "__main__":
     ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
-
     root = ctk.CTk()
-    root.title("DentalPhoto Pro — Protocollo Fotografico (preview)")
+    root.title("DentalPhoto Pro — Protocollo Fotografico")
     root.geometry("1280x780")
-    root.configure(fg_color=T["bg_main"])
-
     frame = ProtocolloFrame(root)
     frame.pack(fill="both", expand=True)
-
     root.mainloop()
