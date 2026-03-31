@@ -18,7 +18,10 @@ from pathlib import Path
 from datetime import date
 from typing import Optional
 from cryptography.fernet import Fernet
+from database import migra_consenso_privacy
 
+
+migra_consenso_privacy()
 # ---------------------------------------------------------------------------
 # CONFIGURAZIONE PERCORSI (System-Aware)
 # ---------------------------------------------------------------------------

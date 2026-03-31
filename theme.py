@@ -54,18 +54,19 @@ MODERN_THEME: dict[str, str] = {
 # ══════════════════════════════════════════════════════════════════════════════
 #  FONT
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 _FAMILY = "Segoe UI"   # fallback: "Helvetica Neue", "SF Pro Display"
 
-FONT_DISPLAY  = ctk.CTkFont(family=_FAMILY, size=22, weight="bold")   # hero title
-FONT_TITLE    = ctk.CTkFont(family=_FAMILY, size=15, weight="bold")   # sezione / header card
-FONT_SUBTITLE = ctk.CTkFont(family=_FAMILY, size=12, weight="normal") # sottotitolo
-FONT_BODY     = ctk.CTkFont(family=_FAMILY, size=12, weight="normal") # corpo testo
-FONT_BODY_B   = ctk.CTkFont(family=_FAMILY, size=12, weight="bold")   # corpo enfatizzato
-FONT_SMALL    = ctk.CTkFont(family=_FAMILY, size=10, weight="normal") # label, metadati
-FONT_SMALL_B  = ctk.CTkFont(family=_FAMILY, size=10, weight="bold")   # badge, chip
-FONT_MONO     = ctk.CTkFont(family="Consolas", size=11, weight="normal")  # codici, ID
-FONT_NAV      = ctk.CTkFont(family=_FAMILY, size=12, weight="bold")   # voci sidebar
-FONT_NAV_SUB  = ctk.CTkFont(family=_FAMILY, size=10, weight="normal") # sotto-voci sidebar
+FONT_DISPLAY  = (_FAMILY, 22, "bold")   # hero title
+FONT_TITLE    = (_FAMILY, 15, "bold")   # sezione / header card
+FONT_SUBTITLE = (_FAMILY, 12, "normal") # sottotitolo
+FONT_BODY     = (_FAMILY, 12, "normal") # corpo testo
+FONT_BODY_B   = (_FAMILY, 12, "bold")   # corpo enfatizzato
+FONT_SMALL    = (_FAMILY, 10, "normal") # label, metadati
+FONT_SMALL_B  = (_FAMILY, 10, "bold")   # badge, chip
+FONT_MONO     = ("Consolas", 11, "normal")  # codici, ID
+FONT_NAV      = (_FAMILY, 12, "bold")   # voci sidebar
+FONT_NAV_SUB  = (_FAMILY, 10, "normal") # sotto-voci sidebar
 
 
 # ══════════════════════════════════════════════════════════════════════════════

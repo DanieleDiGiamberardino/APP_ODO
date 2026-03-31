@@ -36,6 +36,7 @@ try:
 except ImportError:
     _DND_OK = False
 
+from ui_impostazioni import ImpostazioniFrame, load_config
 import database as db
 from auth import SessioneUtente, init_auth_db
 from ui_login import LockScreen, GestioneUtentiFrame
@@ -55,35 +56,40 @@ from ui_timeline import TimelineFrame
 # DEBUG_MODE è True se avvii lo script, False se è un file .exe compilato
 DEBUG_MODE = not getattr(sys, 'frozen', False)
 # ---------------------------------------------------------------------------
-# Tema
+# Tema & Mapping Moderno
 # ---------------------------------------------------------------------------
+from theme import (
+    MODERN_THEME, FONT_DISPLAY, FONT_TITLE, 
+    FONT_BODY, FONT_SMALL, FONT_SMALL_B
+)
 
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
 
+# Mappiamo il vecchio dizionario ai nuovi colori Premium!
 COLORI = {
-    "sidebar_bg":    "#080c18",   # quasi-nero profondo
-    "sidebar_hover": "#0f1629",
-    "accent":        "#0f3460",
-    "accent_bright": "#e94560",
-    "card_bg":       "#0f1629",   # card più scura
-    "testo_chiaro":  "#dce8ff",   # bianco con tinta blu
-    "testo_grigio":  "#6b7a99",
-    "verde_ok":      "#3ecf6e",
-    "sfondo_entry":  "#070b14",
-    "pdf_btn":       "#6a1fa2",
-    "backup_btn":    "#c94a00",
-    "lock_btn":      "#1a4a7a",
-    "sidebar_border":"#1e2d4a",
-    "nav_active":    "#1a2e50",   # voce nav attiva: sfondo azzurro scuro
-    "nav_accent":    "#e94560",   # bordo sinistro voce attiva
+    "sidebar_bg":    MODERN_THEME["bg_sidebar"],
+    "sidebar_hover": MODERN_THEME["sidebar_btn_hover"],
+    "accent":        MODERN_THEME["accent"],          # Teal vibrante
+    "accent_bright": MODERN_THEME["accent2"],         # Blu ghiaccio
+    "card_bg":       MODERN_THEME["bg_panel"],        # Sfondo pannelli "sollevato"
+    "testo_chiaro":  MODERN_THEME["text_primary"],    # Bianco panna
+    "testo_grigio":  MODERN_THEME["text_secondary"],  # Grigio azzurro
+    "verde_ok":      MODERN_THEME["success"],
+    "sfondo_entry":  MODERN_THEME["bg_input"],        # Sfondo per campi di testo
+    "pdf_btn":       MODERN_THEME["accent2_dim"],
+    "backup_btn":    MODERN_THEME["warning"],
+    "lock_btn":      MODERN_THEME["sidebar_btn_active"],
+    "sidebar_border":MODERN_THEME["border"],
+    "nav_active":    MODERN_THEME["sidebar_btn_active"],
+    "nav_accent":    MODERN_THEME["accent"],
 }
 
-FONT_TITOLO  = ("Segoe UI", 22, "bold")
-FONT_SEZIONE = ("Segoe UI", 13, "bold")
-FONT_NORMALE = ("Segoe UI", 12)
-FONT_PICCOLO = ("Segoe UI", 10)
-FONT_BADGE   = ("Segoe UI", 10, "bold")
+# Mappiamo i vecchi font ai nuovi font Premium
+FONT_TITOLO  = FONT_DISPLAY
+FONT_SEZIONE = FONT_TITLE
+FONT_NORMALE = FONT_BODY
+FONT_PICCOLO = FONT_SMALL
+FONT_BADGE   = FONT_SMALL_B
 
 
 # ---------------------------------------------------------------------------
@@ -1608,7 +1614,8 @@ class App(DnDCTk, _SidebarMixin):
         self.bind_all("<KeyPress>", lambda e: SessioneUtente.registra_attivita())
 
         # ── navigazione iniziale ──────────────────────────────────────────────
-        self._navigate("dashboard")
+        self._active_page = ""          # <-- Aggiungi questa riga per resettare lo stato
+        self._naviga("dashboard")       # <-- Cambia _navigate in _naviga
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Layout principale
@@ -1810,6 +1817,8 @@ class App(DnDCTk, _SidebarMixin):
                 return EmailFrame(self._fc)
             case "timeline":
                 return TimelineFrame(self._fc)
+            case "impostazioni":                     
+                return ImpostazioniFrame(self._fc)
             case _:
                 raise ValueError(f"Frame sconosciuto: {key!r}")
 
@@ -2014,11 +2023,16 @@ class App(DnDCTk, _SidebarMixin):
             self.toast("Auto-Import Reflex disattivato.", "info")
             return
 
-        cartella = filedialog.askdirectory(
-            title="Seleziona la cartella della Reflex / SD Wi-Fi"
-        )
-        if not cartella:
-            return
+        # 1. Legge la cartella dalle impostazioni salvate
+        cartella = load_config().get("reflex_path", "")
+        
+        # 2. Se non è impostata, apre il popup per chiederla
+        if not cartella or not Path(cartella).exists():
+            cartella = filedialog.askdirectory(
+                title="Seleziona la cartella della Reflex / SD Wi-Fi"
+            )
+            if not cartella:
+                return
 
         try:
             self._watchdog = CameraWatchdog(
