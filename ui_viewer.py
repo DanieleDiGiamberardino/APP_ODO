@@ -2,6 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 import database as db 
+from dicom_viewer import DicomScreen
 
 
 class ViewerFoto(ctk.CTkToplevel):

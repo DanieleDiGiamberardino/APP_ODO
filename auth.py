@@ -322,8 +322,8 @@ def _log_accesso(utente_id: Optional[int], username: str, esito: str) -> None:
         host = "—"
     with db.get_connection() as conn:
         conn.execute(
-            "INSERT INTO log_accessi (utente_id, username, esito, ip_host) VALUES (?,?,?,?)",
-            (utente_id, username, esito, host),
+            "INSERT INTO log_accessi (username, esito, ip_host) VALUES (?,?,?)",
+            (username, esito, host),
         )
 
 

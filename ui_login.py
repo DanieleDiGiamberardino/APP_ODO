@@ -13,6 +13,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from typing import Optional
 import threading
+from ui_network import NetworkSettingsScreen
 
 import auth
 from auth import SessioneUtente, RUOLI
@@ -100,7 +101,7 @@ class LoginScreen(ctk.CTk):
         self.title("DentalPhoto — Accesso")
         self.configure(fg_color=T["bg_app"])
         self.resizable(False, False)
-        W, H = 820, 520
+        W, H = 820, 600
         self.update_idletasks()
         x = (self.winfo_screenwidth()  - W) // 2
         y = (self.winfo_screenheight() - H) // 2
@@ -112,6 +113,7 @@ class LoginScreen(ctk.CTk):
         self._build_ui()
         self.bind("<Return>", lambda e: self._login())
         self.after(100, self._entry_user.focus_set)
+        
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0, minsize=290)
@@ -210,6 +212,30 @@ class LoginScreen(ctk.CTk):
         ctk.CTkLabel(hint, text="💡  Primo accesso  →  admin / admin1234",
                      font=FL["small"], text_color=T["txt_secondary"],
                      fg_color="transparent").pack(pady=8, padx=12, anchor="w")
+        # Hint (Codice già presente)
+        hint = ctk.CTkFrame(inner, fg_color=T["bg_card"], corner_radius=8,
+                             border_width=1, border_color=T["border"])
+        hint.grid(row=8, column=0, sticky="ew", pady=(20,0))
+        ctk.CTkLabel(hint, text="💡  Primo accesso  →  admin / admin1234",
+                     font=FL["small"], text_color=T["txt_secondary"],
+                     fg_color="transparent").pack(pady=8, padx=12, anchor="w")
+
+        # --------------------------------------------------------
+        # INCOLLA QUESTO (Nuovo Bottone Rete)
+        # --------------------------------------------------------
+        self.btn_rete = ctk.CTkButton(
+            inner, 
+            text="⚙️ Impostazioni Rete", 
+            font=FL["btn"], 
+            height=40,
+            fg_color="transparent", 
+            border_width=1,
+            border_color=T["border"],
+            text_color=T["txt_secondary"],
+            hover_color=T["bg_panel_l"],
+            command=lambda: NetworkSettingsScreen(self)
+        )
+        self.btn_rete.grid(row=9, column=0, sticky="ew", pady=(15,0))
 
     def _toggle_pwd(self):
         self._pwd_visible = not self._pwd_visible

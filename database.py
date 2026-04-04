@@ -23,21 +23,17 @@ from cryptography.fernet import Fernet
 # CONFIGURAZIONE PERCORSI (System-Aware)
 # ---------------------------------------------------------------------------
 
-def _get_app_data_dir() -> Path:
-    """Restituisce il percorso corretto per i dati utente in base all'OS."""
-    system = platform.system()
-    if system == "Windows":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    elif system == "Darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path.home() / ".local" / "share"
-    
-    app_dir = base / "DentalPhoto"
-    app_dir.mkdir(parents=True, exist_ok=True)
-    return app_dir
 
-APP_DIR = _get_app_data_dir()
+
+from config_manager import get_data_dir
+
+# ---------------------------------------------------------------------------
+# CONFIGURAZIONE PERCORSI (System & Network-Aware)
+# ---------------------------------------------------------------------------
+
+APP_DIR = get_data_dir()
+APP_DIR.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = APP_DIR / "dental_app.db"
 IMAGES_DIR = APP_DIR / "images_storage"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)

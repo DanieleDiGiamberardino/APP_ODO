@@ -53,9 +53,11 @@ from ui_webcam import WebcamFrame
 from ui_before_after import BeforeAfterFrame
 from ui_email import EmailFrame
 from ui_timeline import TimelineFrame
+from bridge_import import ImportPazientiDialog
 
 # DEBUG_MODE è True se avvii lo script, False se è un file .exe compilato
-DEBUG_MODE = not getattr(sys, 'frozen', False)
+# DEBUG_MODE = not getattr(sys, 'frozen', False)
+DEBUG_MODE = False
 # ---------------------------------------------------------------------------
 # Tema & Mapping Moderno
 # ---------------------------------------------------------------------------
@@ -1594,6 +1596,9 @@ class App(DnDCTk, _SidebarMixin):
         # ── navigazione iniziale ──────────────────────────────────────────────
         self._active_page = ""          # <-- Aggiungi questa riga per resettare lo stato
         self._naviga("dashboard")       # <-- Cambia _navigate in _naviga
+        # (Auto-Updater)
+        from updater import controlla_aggiornamenti
+        controlla_aggiornamenti(self)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Layout principale
@@ -2076,6 +2081,7 @@ if __name__ == "__main__":
     import database as db
     from auth import init_auth_db, SessioneUtente
     import logging
+    import sys
 
     logging.basicConfig(
         filename=str(db.APP_DIR / "errori_app.log"),
@@ -2085,6 +2091,59 @@ if __name__ == "__main__":
 
     db.init_db()
     init_auth_db()
+
+
+
+    # ════════════════════════════════════════════════════════════════════
+    #  0. BLOCCO EULA E PRIVACY (GDPR)
+    # ════════════════════════════════════════════════════════════════════
+    from config_manager import has_accepted_eula
+    
+    if not has_accepted_eula():
+        import customtkinter as ctk
+        from ui_eula import EulaScreen
+        
+        root_eula = ctk.CTk()
+        root_eula.withdraw() 
+        
+        eula_accettata = False
+        
+        def sblocca_eula():
+            global eula_accettata
+            eula_accettata = True
+            root_eula.destroy()
+            
+        EulaScreen(root_eula, on_accept=sblocca_eula)
+        root_eula.mainloop()
+        
+        if not eula_accettata:
+            sys.exit(0)
+
+     # ════════════════════════════════════════════════════════════════════
+    #  1. NUOVO BLOCCO: CONTROLLO LICENZA
+    # ════════════════════════════════════════════════════════════════════
+    from license_manager import licenza_valida
+    
+    if not licenza_valida():
+        import customtkinter as ctk
+        from ui_licenza import LicenseScreen
+        
+        root_lic = ctk.CTk()
+        root_lic.withdraw() 
+        
+        licenza_attivata = False
+        
+        def sblocca_app():
+            global licenza_attivata  # <--- CAMBIA SOLO QUESTA PAROLA
+            licenza_attivata = True
+            root_lic.destroy()
+            
+        LicenseScreen(root_lic, on_success=sblocca_app)
+        root_lic.mainloop()
+        
+        if not licenza_attivata:
+            sys.exit(0)
+    # ════════════════════════════════════════════════════════════════════
 
     login_successo = False
 
